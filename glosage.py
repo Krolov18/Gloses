@@ -2,6 +2,7 @@
 
 import itertools
 
+
 temp = """
 ":{trait}"
 "-{trait}"

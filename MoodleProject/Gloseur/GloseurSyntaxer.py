@@ -1,6 +1,6 @@
 # coding: utf-8
 
-from latex import build_pdf
+# from latex import build_pdf
 import GloseurLexer
 tokens = GloseurLexer.tokens
 
@@ -20,6 +20,7 @@ def p_M1(p):
         )
     )
 
+
 def p_M2(p):
     """M : K GPHRASES"""
     p[0] = Gloseur(
@@ -31,6 +32,7 @@ def p_M2(p):
             syntaxe=p[1].feedback.S + p[2].feedback.S
         )
     )
+
 
 def p_K1(p):
     """K : R"""
@@ -44,6 +46,7 @@ def p_K1(p):
         )
     )
 
+
 def p_K2(p):
     """K : R TS"""
     p[0] = Gloseur(
@@ -55,6 +58,7 @@ def p_K2(p):
             syntaxe=p[1].feedback.S + p[2].feedback.S
         )
     )
+
 
 def p_GPHRASE(p):
     """GPHRASE : PHRASE K"""
@@ -78,6 +82,7 @@ def p_GPHRASE(p):
             syntaxe=[p[1]] + p[2].feedback.S
         )
     )
+
 
 def p_GPHRASES1(p):
     """GPHRASES : GPHRASE GPHRASES
@@ -104,6 +109,7 @@ def p_GPHRASES1(p):
             )
         )
 
+
 def p_R1(p):
     """R : LEMME POLYP"""
     p[0] = Gloseur(
@@ -126,6 +132,7 @@ def p_R1(p):
             syntaxe=[p[1]] + p[2].feedback.S
         )
     )
+
 
 def p_R2(p):
     """R : LEMME INHERP"""
@@ -150,6 +157,7 @@ def p_R2(p):
         )
     )
 
+
 def p_R3(p):
     """R : POLYP"""
     p[0] = Gloseur(
@@ -161,6 +169,7 @@ def p_R3(p):
             syntaxe=p[1].feedback.S
         )
     )
+
 
 def p_R4(p):
     """R : DPTRAIT LEMME"""
@@ -184,6 +193,7 @@ def p_R4(p):
             syntaxe=p[1].feedback.S + [p[2]]
         )
     )
+
 
 def p_GPTRAIT(p):
     """GPTRAIT : PORTMA TRAIT"""
@@ -216,6 +226,7 @@ def p_GPTRAIT(p):
         )
     )
 
+
 def p_GPTRAITS1(p):
     """GPTRAITS : GPTRAIT GPTRAITS
     			| GPTRAIT
@@ -240,6 +251,7 @@ def p_GPTRAITS1(p):
                 syntaxe=p[1].feedback.S
             )
         )
+
 
 def p_DPTRAIT(p):
     """DPTRAIT : TRAIT PORTMA"""
@@ -272,6 +284,7 @@ def p_DPTRAIT(p):
         )
     )
 
+
 def p_POLYP1(p):
     """POLYP : RT"""
     p[0] = Gloseur(
@@ -284,6 +297,7 @@ def p_POLYP1(p):
         )
     )
 
+
 def p_POLYP2(p):
     """POLYP : RT POLYS"""
     p[0] = Gloseur(
@@ -295,6 +309,7 @@ def p_POLYP2(p):
             syntaxe=p[1].feedback.S + p[2].feedback.S
         )
     )
+
 
 def p_RT1(p):
     """RT : TRAIT"""
@@ -317,6 +332,7 @@ def p_RT1(p):
             syntaxe=[p[1]]
         )
     )
+
 
 def p_RT2(p):
     """RT : TRAIT GPTRAITS"""
@@ -341,6 +357,7 @@ def p_RT2(p):
         )
     )
 
+
 def p_RT3(p):
     """RT : GPTRAITS"""
     p[0] = Gloseur(
@@ -352,6 +369,7 @@ def p_RT3(p):
             syntaxe=p[1].feedback.S
         )
     )
+
 
 def p_POLY(p):
     """POLY : POLYSE RT"""
@@ -376,9 +394,10 @@ def p_POLY(p):
         )
     )
 
+
 def p_POLYS1(p):
     """POLYS : POLY POLYS
-    		 | POLY
+             | POLY
     """
     if len(p) == 3:
         p[0] = Gloseur(
@@ -400,6 +419,7 @@ def p_POLYS1(p):
                 syntaxe=p[1].feedback.S
             )
         )
+
 
 def p_INHERP(p):
     """INHERP : GINHER POLYP DINHER"""
@@ -433,6 +453,7 @@ def p_INHERP(p):
         )
     )
 
+
 def p_MORPH0(p):
     """MORPH0 : GMORPH0 POLYP DMORPH0"""
     p[0] = Gloseur(
@@ -464,6 +485,7 @@ def p_MORPH0(p):
             syntaxe=[p[1]] + p[2].feedback.S + [p[3]]
         )
     )
+
 
 def p_INFIX(p):
     """INFIX : GINFIX POLYP DINFIX"""
@@ -498,6 +520,7 @@ def p_INFIX(p):
         )
     )
 
+
 def p_T1(p):
     """T : REDUPL POLYP"""
     p[0] = Gloseur(
@@ -520,6 +543,7 @@ def p_T1(p):
             syntaxe=[p[1]] + p[2].feedback.S
         )
     )
+
 
 def p_T2(p):
     """T : POLYP REDUPL"""
@@ -544,6 +568,7 @@ def p_T2(p):
         )
     )
 
+
 def p_T3(p):
     """T : ABLAUT POLYP"""
     p[0] = Gloseur(
@@ -566,6 +591,7 @@ def p_T3(p):
             syntaxe=[p[1]] + p[2].feedback.S
         )
     )
+
 
 def p_T4(p):
     """T : POLYP ABLAUT"""
@@ -590,6 +616,7 @@ def p_T4(p):
         )
     )
 
+
 def p_T5(p):
     """T : CLITIC POLYP"""
     p[0] = Gloseur(
@@ -612,6 +639,7 @@ def p_T5(p):
             syntaxe=[p[1]] + p[2].feedback.S
         )
     )
+
 
 def p_T6(p):
     """T : POLYP CLITIC"""
@@ -637,6 +665,7 @@ def p_T6(p):
         )
     )
 
+
 def p_T7(p):
     """T : UNSPEC POLYP"""
     p[0] = Gloseur(
@@ -659,6 +688,7 @@ def p_T7(p):
             syntaxe=[p[1]] + p[2].feedback.S
         )
     )
+
 
 def p_T8(p):
     """T : POLYP UNSPEC"""
@@ -683,6 +713,7 @@ def p_T8(p):
         )
     )
 
+
 def p_T9(p):
     """T : AFFIX POLYP"""
     p[0] = Gloseur(
@@ -705,6 +736,7 @@ def p_T9(p):
             syntaxe=[p[1]] + p[2].feedback.S
         )
     )
+
 
 def p_T10(p):
     """T : POLYP AFFIX"""
@@ -729,6 +761,7 @@ def p_T10(p):
         )
     )
 
+
 # def p_T11(p):
 #     """T : CIRCONF2 POLYP"""
 #     p[0] = Gloseur(
@@ -751,6 +784,7 @@ def p_T10(p):
 #             syntaxe=[p[1]] + p[2].feedback.S
 #         )
 #     )
+
 
 def p_T12(p):
     """T : POLYP CIRCONF2"""
@@ -775,6 +809,7 @@ def p_T12(p):
         )
     )
 
+
 def p_T13(p):
     """T : INFIX"""
     p[0] = Gloseur(
@@ -787,6 +822,7 @@ def p_T13(p):
         )
     )
 
+
 def p_T14(p):
     """T : MORPH0"""
     p[0] = Gloseur(
@@ -798,6 +834,7 @@ def p_T14(p):
             syntaxe=p[1].feedback.S
         )
     )
+
 
 # il ne@1 faut pas@1 mourir
 def p_T15(p):
@@ -823,9 +860,10 @@ def p_T15(p):
         )
     )
 
+
 def p_TS1(p):
     """TS : T TS
-    	  | T
+          | T
     """
     if len(p) == 3:
         p[0] = Gloseur(
@@ -848,43 +886,23 @@ def p_TS1(p):
             )
         )
 
+
 def p_error(p):
     if p:
         print("Syntax error at '%s'" % p.value)
     else:
         print("Syntax error at EOF")
 
+
 parser = yacc.yacc()
 
-def parcours_deep(obj):
-    if (obj.children == None):
-        print("B :  ",obj.head,obj.feedback.B)
-        print("TO : ",obj.head,obj.feedback.TO)
-        print("S :  ",obj.head,obj.feedback.S)
-    else:
-        print("B :  ",obj.head,obj.feedback.B)
-        for child in obj.children:
-            parcours_deep(child)
-        print("TO : ",obj.head,obj.feedback.TO)
-        print("S :  ",obj.head,obj.feedback.S)
 
-phrases = [
-    "DEF.M.SG.NLIAIS"
-]
+def main():
+    phrases = ["vendre.IND.FUT/CND.PRS/CND.PST-1PL"]
+    for p in phrases:
+        result = parser.parse(p)
+        print(result.to_strings())
+        # parcours_deep(result)
 
-min_latex = """
-            \\documentclass[a2paper,landscape]{{article}}\n
-            \\usepackage{{qtree}}
-            \\usepackage{{geometry}}
-            \\begin{{document}}\n\n
-            \\small{{
-            \\Tree {0}\n\n
-            }
-            \\end{{document}}\n
-"""
-
-for phrase in phrases:
-    result = parser.parse(phrase)
-    parcours_deep(result)
-    #op = open("phrases/"+"".join(result.feedback.S)+".tex","w")
-    #op.write(min_latex % result.to_string)
+if __name__ == '__main__':
+    main()

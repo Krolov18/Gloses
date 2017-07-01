@@ -1,3 +1,5 @@
+
+
 Le			chat			mange					la			souris.
 le			chat			mange					le			souris
 DEF-M.SG	chat(M)[SG]		manger.IND_PRS.13SG		DEF-F.SG	souris(F)[SG/PL]
