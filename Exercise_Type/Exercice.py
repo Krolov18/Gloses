@@ -1,7 +1,8 @@
 # coding: utf-8
+import typing
+from operator import add
 
-
-class Exercice(object):
+class Exercise(object):
     def __init__(self):
         pass
         # champs = ('SA', 'SAC', 'MC', 'MCV', 'MCH', 'RX', "RXC", 'TXT')
@@ -56,54 +57,38 @@ def initialise(taille: int):
     return {i: {"buffer": str(), "posss": None} for i in range(1, taille)}
 
 
-def procedure_mokrwaze(taille: int, bdd: dict, debug=False):
+def procedure_mokrwaze(taille: typing.Union[int, tuple], bdd: dict, debug=False):
     from sys import stderr
-    struc = initialise(taille=taille+1)
-    if debug:
-        print("struc", struc, sep=': ', file=stderr)
-    seq_p = range(2, taille+1, 2)
-    seq_i = range(1, taille+1, 2)
-    if debug:
-        print(list(seq_p), list(seq_i), sep=' ----- ', file=stderr)
-    i = 1
-    while i <= taille:
-        if not struc.get(i).get('posss'):
-            struc[i]['posss'] = filter(
-                lambda x: x.startswith(struc.get(i).get('buffer')),
-                bdd
-            )
-        answer = next(struc.get(i).get('posss'), None)
-        if debug:
-            print(i, struc.get(i), file=stderr)
-        if bdd.get(struc.get(i).get('buffer'), False):
-            if est_pair(i):
-                distribue_soluce(answer, seq_i, struc)
-            else:
-                distribue_soluce(answer, seq_p, struc)
-            yield struc
 
-        # if debug:
-        #     print(i, answer, struc, sep=' || ', file=stderr)
-        while answer is not None:
-            if est_pair(i):
-                struc = distribue_soluce(answer, seq_i, struc, False)
-                if debug:
-                    print(i, answer, struc, sep=' || ', file=stderr)
-                i += 1
-                break
-            elif not est_pair(i):
-                struc = distribue_soluce(answer, seq_p, struc, False)
-                if debug:
-                    print(i, answer, struc, sep=' || ', file=stderr)
-                i += 1
-                break
+    if isinstance(taille, int):
+        taille = (taille, taille)
+    elif isinstance(taille, tuple) and (len(taille) != 2):
+        raise Exception(
+            'Attention, on ne travaille qu\'en bidimentionnel, donc, soit un entier, soit un couple d\'entier'
+        )
+    length = add(*taille)
+    length_1 = length + 1
+    struc = initialise(length_1)
+    seq_p = range(2, length_1, 2)
+    seq_i = range(1, length_1, 2)
+    i = 1
+    while (i >= 1) and (i <= length):
+        if not struc.get(i).get('posss'):
+            struc[i]['posss'] = filter(lambda x: x.startswith(struc.get(i).get('buffer')), bdd)
+        answer = next(struc.get(i).get('posss'), None)
+        while answer is None:
+            print(i)
+            i -= 1
+            retire_soluce(seq_i if est_pair(i) else seq_p, struc)
+            answer = next(struc.get(i).get('posss'), None)
+            print(answer)
+        distribue_soluce(answer, seq_i if est_pair(i) else seq_p, struc)
+        if i == length:
+            yield [struc.get(x).get('buffer') for x in range(1, length+1)]
+            retire_soluce(seq_i if est_pair(i) else seq_p, struc)
             answer = next(struc.get(i).get('posss'), None)
         else:
-            i -= 1
-            if est_pair(i):
-                struc = retire_soluce(seq_i, struc)
-            else:
-                struc = retire_soluce(seq_p, struc)
+            i += 1
 
 
 def est_pair(x: int):
@@ -156,13 +141,14 @@ def main():
     }
 
     with sqlite3.connect('../../Lexiques/Lexique381/Lexique.db') as connect:
-        taille = 3
+        taille = 5
         cursor = connect.cursor()
         cursor.execute('SELECT phon FROM Lexique WHERE length(phon)=?', (taille,))
         bdd = set([neutralise(x, symbs) for x in itertools.chain(*cursor.fetchall())])
         bdd = dict(zip(bdd, [True]*len(bdd)))
-        tmp = procedure_mokrwaze(taille=taille, bdd=bdd, debug=True)
-        next(tmp)
+        tmp = procedure_mokrwaze(taille=(10, 10), bdd=bdd, debug=False)
+        for x in tmp:
+            print("soluce: ", x)
 
 if __name__ == '__main__':
     main()
