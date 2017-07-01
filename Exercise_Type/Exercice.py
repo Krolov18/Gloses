@@ -37,7 +37,10 @@ def neutralise(chaine, symbs):
     return chaine
 
 
-def distribue_soluce(x: str, y: range, struc: dict):
+def distribue_soluce(x: str, y: range, struc: dict, debug=False):
+    from sys import stderr
+    if debug:
+        print("distrib: ", struc.values(), file=stderr)
     for k, v in zip(y, x):
         struc[k]['buffer'] += v
     return struc
@@ -50,44 +53,57 @@ def retire_soluce(y: range, struc: dict):
 
 
 def initialise(taille: int):
-    return {i: {"buffer": str(), "posss": None} for i in range(1, taille+1)}
+    return {i: {"buffer": str(), "posss": None} for i in range(1, taille)}
 
 
 def procedure_mokrwaze(taille: int, bdd: dict, debug=False):
-    struc = initialise(taille=taille)
+    from sys import stderr
+    struc = initialise(taille=taille+1)
     if debug:
-        print("struc", struc, sep=': ')
+        print("struc", struc, sep=': ', file=stderr)
     seq_p = range(2, taille+1, 2)
     seq_i = range(1, taille+1, 2)
     if debug:
-        print(seq_p, seq_i, sep='-----')
+        print(list(seq_p), list(seq_i), sep=' ----- ', file=stderr)
     i = 1
-    print('poire')
-    while (i <= (taille * 2)) and bdd.get(struc.get(i).get('buffer'), False):
-        print('camembert')
+    while i <= taille:
         if not struc.get(i).get('posss'):
             struc[i]['posss'] = filter(
                 lambda x: x.startswith(struc.get(i).get('buffer')),
                 bdd
             )
         answer = next(struc.get(i).get('posss'), None)
+        if debug:
+            print(i, struc.get(i), file=stderr)
+        if bdd.get(struc.get(i).get('buffer'), False):
+            if est_pair(i):
+                distribue_soluce(answer, seq_i, struc)
+            else:
+                distribue_soluce(answer, seq_p, struc)
+            yield struc
+
+        # if debug:
+        #     print(i, answer, struc, sep=' || ', file=stderr)
         while answer is not None:
             if est_pair(i):
-                distribue_soluce(answer, seq_i, bdd)
+                struc = distribue_soluce(answer, seq_i, struc, False)
+                if debug:
+                    print(i, answer, struc, sep=' || ', file=stderr)
                 i += 1
                 break
             elif not est_pair(i):
-                distribue_soluce(answer, seq_p, bdd)
+                struc = distribue_soluce(answer, seq_p, struc, False)
+                if debug:
+                    print(i, answer, struc, sep=' || ', file=stderr)
                 i += 1
                 break
             answer = next(struc.get(i).get('posss'), None)
         else:
             i -= 1
             if est_pair(i):
-                retire_soluce(seq_i, bdd)
+                struc = retire_soluce(seq_i, struc)
             else:
-                retire_soluce(seq_p, bdd)
-    print('banane')
+                struc = retire_soluce(seq_p, struc)
 
 
 def est_pair(x: int):
@@ -143,23 +159,10 @@ def main():
         taille = 3
         cursor = connect.cursor()
         cursor.execute('SELECT phon FROM Lexique WHERE length(phon)=?', (taille,))
-        # cursor.execute('SELECT phon FROM Lexique WHERE length(phon)=?', (taille,))
-        bdd = list(set([neutralise(x, symbs) for x in itertools.chain(*cursor.fetchall())]))
-        print([x for x in bdd if x.startswith('')])
-        print(list(filter(lambda x: x.startswith(''), bdd)))
-        # for x in bdd:
-        #    regex = [y+'.'*(len(x)-1) for y in x]
-        #    i = 0
-        #    for fs in itertools.product(*[[h for h in bdd if re.match(g, h)] for g in regex]):
-        #        i += 1
-        #        cml = "".join((y[i] for y in fs))
-        #        if i + 1 == taille:
-        #            print(fs, file=sys.stderr)
-        #            break
-        # print(bdd)
-        # tmp = phonoku(bdd=bdd, output="phonoku_6")
-        # list(tmp)
-
+        bdd = set([neutralise(x, symbs) for x in itertools.chain(*cursor.fetchall())])
+        bdd = dict(zip(bdd, [True]*len(bdd)))
+        tmp = procedure_mokrwaze(taille=taille, bdd=bdd, debug=True)
+        next(tmp)
 
 if __name__ == '__main__':
-    main2()
+    main()
