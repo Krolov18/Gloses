@@ -69,26 +69,54 @@ def procedure_mokrwaze(taille: typing.Union[int, tuple], bdd: dict, debug=False)
     length = add(*taille)
     length_1 = length + 1
     struc = initialise(length_1)
+    print(struc)
     seq_p = range(2, length_1, 2)
     seq_i = range(1, length_1, 2)
     i = 1
-    while (i >= 1) and (i <= length):
+    while i <= length:
         if not struc.get(i).get('posss'):
             struc[i]['posss'] = filter(lambda x: x.startswith(struc.get(i).get('buffer')), bdd)
         answer = next(struc.get(i).get('posss'), None)
-        while answer is None:
-            print(i)
+        print(answer)
+        while answer is not None:
+            distribue_soluce(answer, seq_i if est_pair(i) else seq_p, struc, True)
+            if i == length:
+                yield struc
+                retire_soluce(seq_i if est_pair(i) else seq_p, struc)
+                i -= 1
+                answer = next(struc.get(i).get('posss'), None)
+            else:
+                i += 1
+        i -= 1
+        retire_soluce(seq_i if est_pair(i) else seq_p, struc)
+
+
+def procedure_mokrwaze_2(taille, bdd, debug):
+    # from sys import stderr
+    length = taille + taille
+    length_1 = length + 1
+    struc = initialise(length_1)
+    seq_i = range(1, length_1, 2)
+    seq_p = range(2, length_1, 2)
+    i = 1
+    struc[i]['posss'] = filter(lambda x: x.startswith(struc.get(i).get('buffer')), bdd)
+    while (i <= length) and (i >= 1):
+        if not struc.get(i).get('posss'):
+            struc[i]['posss'] = filter(lambda x: x.startswith(struc.get(i).get('buffer')), bdd)
+        answer = next(struc.get(i).get('posss'), None)
+        while answer is not None:
+            distribue_soluce(answer, seq_i if est_pair(i) else seq_p, struc)
+            if i == length:
+                yield [struc.get(i).get('buffer') for i in range(1, length_1)]
+                retire_soluce(seq_i if est_pair(i) else seq_p, struc)
+            else:
+                i += 1
+            if not struc.get(i).get('posss'):
+                struc[i]['posss'] = filter(lambda x: x.startswith(struc.get(i).get('buffer')), bdd)
+            answer = next(struc.get(i).get('posss'), None)
+        retire_soluce(seq_i if est_pair(i) else seq_p, struc)
+        if i >= 1:
             i -= 1
-            retire_soluce(seq_i if est_pair(i) else seq_p, struc)
-            answer = next(struc.get(i).get('posss'), None)
-            print(answer)
-        distribue_soluce(answer, seq_i if est_pair(i) else seq_p, struc)
-        if i == length:
-            yield [struc.get(x).get('buffer') for x in range(1, length+1)]
-            retire_soluce(seq_i if est_pair(i) else seq_p, struc)
-            answer = next(struc.get(i).get('posss'), None)
-        else:
-            i += 1
 
 
 def est_pair(x: int):
@@ -141,14 +169,16 @@ def main():
     }
 
     with sqlite3.connect('../../Lexiques/Lexique381/Lexique.db') as connect:
-        taille = 5
+        taille = 6
         cursor = connect.cursor()
         cursor.execute('SELECT phon FROM Lexique WHERE length(phon)=?', (taille,))
         bdd = set([neutralise(x, symbs) for x in itertools.chain(*cursor.fetchall())])
         bdd = dict(zip(bdd, [True]*len(bdd)))
-        tmp = procedure_mokrwaze(taille=(10, 10), bdd=bdd, debug=False)
+        tmp = procedure_mokrwaze_2(taille=taille, bdd=bdd, debug=False)
         for x in tmp:
-            print("soluce: ", x)
+            print(x)
+        # for x in tmp:
+        #     print("soluce: ", x)
 
 if __name__ == '__main__':
     main()
