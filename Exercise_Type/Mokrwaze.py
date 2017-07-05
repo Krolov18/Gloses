@@ -253,8 +253,8 @@ def main():
 
     cursor = args.bdd.cursor()
 
-    cursor.execute('SELECT phon FROM Lexique WHERE length(phon)=?', (taille,))
-    bdd = sorted(set([neutralise(x, symbs) for x in itertools.chain(*cursor.fetchall())]))
+    cursor.execute('SELECT DISTINCT phon FROM Lexique WHERE length(phon)=?', (taille,))
+    bdd = [neutralise(x, symbs) for x in itertools.chain(*cursor.fetchall())]
     procedure_mokrwaze_1(taille=taille, bdd=bdd, grid=args.grid, debug=args.verbose)
 
 if __name__ == '__main__':
