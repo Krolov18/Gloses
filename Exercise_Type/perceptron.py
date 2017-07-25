@@ -7,8 +7,12 @@ from Exercise_Type.combinations import combinations
 from Exercise_Type.Powerset import Variable
 from Exercise_Type.tfidf import tf_idf
 from sys import stderr
-# import sqlite3
-import pymysql
+from itertools import chain
+import sqlite3
+from codecs import open
+import psycopg2
+from psycopg2 import sql
+from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
 
 class Perceptron(object):
@@ -357,9 +361,9 @@ def procedure_tfidf(queue: Queue, bdd, cursor, corpus, debug=False):
         bdd.commit()
 
 
-def create_tables(bdd, cursor):
+def create_tables(cursor):
     examples = """CREATE TABLE IF NOT EXISTS Examples (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY,
     example_id INTEGER,
     class_id INTEGER,
     feature_id INTEGER,
@@ -368,13 +372,13 @@ def create_tables(bdd, cursor):
     foreign key (feature_id) REFERENCES Features(id)
 )"""
     classes = """CREATE TABLE IF NOT EXISTS Classes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    classe STRING UNIQUE
+    id INTEGER PRIMARY KEY,
+    classe TEXT UNIQUE
 )
 """
     features = """CREATE TABLE IF NOT EXISTS Features (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    feature STRING UNIQUE
+    id INTEGER PRIMARY KEY,
+    feature TEXT UNIQUE
 )
 """
     corpus = """CREATE TABLE IF NOT EXISTS Corpus (
@@ -521,26 +525,74 @@ def main2():
 
 
 def main3():
-    bdd_name = '/Volumes/Research/Research/Perceptron.db'
-    lexicon = pymysql.connect(host='localhost', port=3306, user='root', passwd='tdBd!v?SH4cM')
-    # db='base', user='root', passwd='pwd', unix_socket="/tmp/mysql.sock"
-    # lexicon = pymysql.connect(host='localhost', port=3306, user='root', passwd='/#r\\,kWGyT2J=kE,gY;;', db='Lexique.db')
-    # lexicon_cursor = lexicon.cursor()
-    # lexicon_cursor.execute('SELECT DISTINCT cgram,ortho FROM Lexique')
-    # corpus = lexicon_cursor.fetchall()
-    # corpus = [("NOM", "abaisse-langue")]
-    # bdd = sqlite3.connect(bdd_name, timeout=10)
-    # bdd_cursor = bdd.cursor()
-    # create_tables(bdd=bdd, cursor=bdd_cursor)
-    # bdd.commit()
-    # sequences = list(map(lambda x: x[1], corpus))
-    # bdd_cursor.execute('SELECT DISTINCT example_id FROM Examples order by example_id asc')
+    perceptron_bdd = '/Volumes/RESEARCH/Research/Perceptron.db'
+    lexicon_bdd = 'Lexique.db'
+    lexicon = sqlite3.connect(database=lexicon_bdd)
+    lexicon_cursor = lexicon.cursor()
+    lexicon_cursor.execute("SELECT * FROM sqlite_master")
+    # print(lexicon_cursor.fetchall()[0][-1])
+
+    eee = """CREATE TABLE IF NOT EXISTS Lexique381 (
+    ortho TEXT,
+    phon TEXT,
+    lemme TEXT,
+    cgram TEXT,
+    genre TEXT,
+    nombre TEXT,
+    freqlemfilms2 TEXT,
+    freqlemlivres TEXT,
+    freqfilms2 TEXT,
+    freqlivres TEXT,
+    infover STRNG,
+    nbhomogr TEXT,
+    nbhomoph TEXT,
+    islem TEXT,
+    nblettres TEXT,
+    nbphons TEXT,
+    p_cvcv TEXT,
+    voisorth TEXT,
+    voisphon TEXT,
+    puorth TEXT,
+    puphon TEXT,
+    syll TEXT,
+    nbsyll TEXT,
+    cv_cv TEXT,
+    orthrenv TEXT,
+    phonrenv TEXT,
+    orthosyll TEXT,
+    cgramortho TEXT,
+    deflem TEXT,
+    defobs TEXT,
+    old20 TEXT,
+    pld20 TEXT,
+    morphoder TEXT,
+    nbmorph TEXT
+)"""
+    lexicon_cursor.execute("SELECT cgram,ortho FROM Lexique")
+    corpus = lexicon_cursor.fetchall()
+    bdd = sqlite3.connect(perceptron_bdd, timeout=10)
+    bdd_cursor = bdd.cursor()
+
+    bdd_cursor.execute('pragma main.pagesize=4096')
+    bdd_cursor.execute('pragma main.cache_size=-1000000')
+    bdd_cursor.execute('pragma main.locking_mode=EXCLUSIVE')
+    bdd_cursor.execute('pragma main.synchronous=NORMAL')
+    bdd_cursor.execute('pragma main.journal_mode=WAL')
+    bdd_cursor.execute('pragma main.cache_size=5000')
+    create_tables(cursor=bdd_cursor)
+    bdd.commit()
+    sequences = list(map(lambda x: x[1], corpus))
+    bdd_cursor.execute('SELECT DISTINCT example_id FROM Examples order by example_id asc')
     # print(bdd_cursor.fetchone())
     # tfidf_queue = Queue()
-    # procedure_corpus(corpus=corpus, bdd=bdd, cursor=bdd_cursor, seuil=100, debug=True)
+    procedure_corpus(corpus=corpus, bdd=bdd, cursor=bdd_cursor, seuil=100, debug=True)
     # tfidf_process = Process(target=procedure_tfidf, args=(tfidf_queue, bdd, bdd_cursor, sequences, True))
     # tfidf_process.start()
     # tfidf_process.join()
+
+
+def get_bdd_size(bdd):
+    pass
 
 
 if __name__ == '__main__':
