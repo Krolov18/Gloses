@@ -29,7 +29,7 @@ def appartient(x: str, y: str, overlapped: bool=False) -> bool:
 
 
 def main():
-    pass
+    print()
 
 if __name__ == '__main__':
     main()

@@ -592,6 +592,11 @@ def main3():
 
 
 def get_bdd_size(bdd):
+    """
+
+    :param bdd:
+    :return:
+    """
     pass
 
 
