@@ -6,7 +6,7 @@ import yaml
 from codecs import open
 
 
-def gestion_infover(sequence):
+def decoupe_infover(sequence):
     """
         parser le champs infover de lexique 381
         on etourne un dictionnaire avec les champs mode, temps et personne
@@ -100,7 +100,7 @@ def gestion_lexique381(ortho='', phon='', lemme='', cgram='', genre='', nombre='
             elif nombre == 'pl':
                 nombre = affix.format(nombre.upper())
         elif cgram in ["VER", 'AUX']:
-            infover = decoupe(infover)
+            infover = decoupe_infover(infover)
             if infover:
                 if len(infover) > 1:
                     pass

@@ -1,11 +1,14 @@
 # coding: utf-8
-from operator import add
+import operator
 from itertools import chain
 from copy import deepcopy
 import re
 import numpy
 from collections import defaultdict
 import itertools
+from multiprocessing import Process, Queue
+from sqlite3 import Cursor, connect
+import sys
 
 
 class InfiniteDict(defaultdict):
@@ -123,7 +126,7 @@ def initialise(i, grid=None):
     if grid:
         x = len(grid)
         y = len(grid[0])
-        if add(x, y) == i:
+        if operator.add(x, y) == i:
             for (k, v) in zip(range(1, i + 1), chain(*zip(grid, transpose(grid)))):
                 sortie[k] = deepcopy(champs)
                 sortie[k]['regex'] = v
@@ -162,7 +165,7 @@ def procedure_mokrwaze_1(taille, bdd, grid=None, debug=False):
 
     length_bdd = len(bdd)
     print(taille)
-    length = taille + taille if isinstance(taille, int) else add(*taille)
+    length = taille + taille if isinstance(taille, int) else operator.add(*taille)
     length_1 = length + 1
     struc = initialise(length, grid=grid)
     seq_i = range(1, length_1, 2)
@@ -323,11 +326,59 @@ def colonnes(lignes, debug=False):
     return result
 
 
-def test_numpy(taille, bdd):
-    from numpy import transpose, chararray
-    itertools.groupby()
-    for i in range(taille):
+def segmente(curseur, column, length):
+    """
+        A partir d'une base de données, ainsi que d'une colonne précise, on va construire
+        une dictionnaire ayant pour clé la taille des sous chaines qui lui correspondront et en valeurs
+        les sous chaines correspondantes.
+    :param curseur: sqlite3.cursor
+    :param column: chaine de caracteres correspondant à une table de la bdd
+    :param length: taille maximale de la chaine
+    :return: dictionnaire (int, liste)
+    """
+    struc = dict(zip(range(1, length+1), [None]*length))
+    for i in range(1, length+1):
+        curseur.execute(
+            "SELECT DISTINCT substr({column},1,?) FROM lexique where length({column})=?;".format(
+                column=column
+            ),
+            (i, length)
+        )
+        struc[i] = list(liste_resultats(curseur.fetchall()))
+    return struc
 
+
+def init_1(bdd: dict):
+    """
+        Parcours d'une portion de la bdd, pour rechercher les carrés initiaux compatibles
+        on yield les lignes.
+    :param bdd:
+    :return:
+    """
+    for x, y in itertools.combinations(bdd.get(2), 2):
+        if all(z in bdd.get(2) for z in transpose((x, y))):
+            yield [x, y]
+
+
+def extension(args: list, i: int, max: int, bdd: dict, result: open):
+    if i == max:
+        print(*args, sep=";", file=result)
+    else:
+        i += 1
+        for x, y in itertools.combinations(bdd.get(i), 2):
+            if x[-1] == y[-1]:
+                xxx = args+[x]
+                for j in range(len(y)-1):
+                    xxx[j] += y[j]
+                calcul = all(z in bdd.get(i) for z in xxx + list(transpose(xxx)))
+                if calcul:
+                    extension(xxx, i, max, bdd, result)
+
+
+def ff(bdd, i):
+    for elem in itertools.product(bdd.get(i), repeat=i):
+        if all(x in bdd.get(i) for x in transpose(elem)):
+            print(elem)
 
 
 def main():
@@ -384,60 +435,106 @@ def main():
     # procedure_mokrwaze_1(taille=taille, bdd=bdd, grid=args.grid, debug=args.verbose)
 
 
-def segmente(curseur, column, length):
-    """
-        A partir d'une base de données, ainsi que d'une colonne précise, on va construire
-        une dictionnaire ayant pour clé la taille des sous chaines qui lui correspondront et en valeurs
-        les sous chaines correspondantes.
-    :param curseur: sqlite3.cursor
-    :param column: chaine de caracteres correspondant à une table de la bdd
-    :param length: taille maximale de la chaine
-    :return: dictionnaire (int, liste)
-    """
-    struc = dict(zip(range(1, length+1), [None]*length))
-    for i in range(1, length+1):
-        curseur.execute(
-            "SELECT DISTINCT substr({column},1,?) FROM lexique where length({column})=?;".format(
-                column=column
-            ),
-            (i, length)
-        )
-        struc[i] = list(liste_resultats(curseur.fetchall()))
+def procedure_grille(length: int, inds: tuple, industrie: defaultdict, bdd: Cursor):
+    i = 0
+    while True:
+        if inds == (0, 0):
+            id1 = (inds[0] + 1, inds[1])
+            id2 = (inds[0], inds[1] + 1)
+            [industrie[id1].reception.put(x) for x in industrie[inds].memoire]
+            [industrie[id2].reception.put(x) for x in industrie[inds].memoire]
+        else:
+            print("lecture:", inds, file=sys.stderr)
+            grille = industrie[inds].reception.get()
+            print(type(grille))
+            for grid in industrie.get(inds).memooire:
+                calcul = add(grille, grid)
+                if calcul is not None:
+                    id1 = (inds[0] + 1, inds[1])
+                    id2 = (inds[0], inds[1] + 1)
+                    industrie[id1].reception.put(calcul)
+                    industrie[id2].reception.put(calcul)
+        if inds == (length, length):
+            grille = industrie[inds].reception.get()
+            print(grille)
+            i += 1
+            cmd = "INSERT INTO Mokrwaze(mo_num, ligne) VALUES (?, ?)"
+            bdd.executemany(cmd, ["".join(x) for x in grille])
+
+
+
+def add(g1: numpy.chararray, g2: numpy.chararray):
+    g3 = numpy.chararray(shape=g1.shape)
+    for i in g1:
+        for j in g1:
+            if g1[i][j] == g2[i][j]:
+                g3[i][j] = g1[i][j]
+            elif (g1[i][j] + g2[i][j]) == (g1[i][j] or g2[i][j]):
+                g3[i][j] = (g1[i][j] or g2[i][j])
+            else:
+                return None
+    return g3
+
+
+def initialise_memoire(i: int, k: int, sequences: list):
+    from itertools import combinations
+    from numpy import chararray
+    from collections import defaultdict
+
+    struc = defaultdict(Zone)
+    if k == 1:
+        for r in range(i):
+            grid = chararray((i, i))
+            for (x, y) in combinations(iterable=sequences, r=2):
+                grid[r] = list(x)
+                grid[:, r] = list(y)
+                struc[(r, r)].memoire = grid
+    elif k == 2:
+        for r in range(i):
+            for s in range(i):
+                grid = chararray((i, i))
+                for v, w in combinations(iterable=sequences, r=2):
+                    grid[r] = list(v)
+                    grid[:, s] = list(w)
+                    struc[(r, s)].memoire = grid
     return struc
 
 
-def init_1(bdd: dict):
-    """
-        Parcours d'une portion de la bdd, pour rechercher les carrés initiaux compatibles
-        on yield les lignes.
-    :param bdd:
-    :return:
-    """
-    for x, y in itertools.combinations(bdd.get(2), 2):
-        if all(z in bdd.get(2) for z in transpose((x, y))):
-            yield [x, y]
+class Zone(object):
+    def __init__(self):
+        # self.envoi = Queue()
+        self.reception = Queue()
+        self.memoire = defaultdict(lambda: defaultdict(set))
 
 
-def extension(args: list, i: int, max: int, bdd: dict, result: open):
-    if i == max:
-        print(*args, sep=";", file=result)
-    else:
-        i += 1
-        for x, y in itertools.combinations(bdd.get(i), 2):
-            if x[-1] == y[-1]:
-                xxx = args+[x]
-                for j in range(len(y)-1):
-                    xxx[j] += y[j]
-                calcul = all(z in bdd.get(i) for z in xxx + list(transpose(xxx)))
-                if calcul:
-                    extension(xxx, i, max, bdd, result)
-
-
-def ff(bdd, i):
-    for elem in itertools.product(bdd.get(i), repeat=i):
-        if all(x in bdd.get(i) for x in transpose(elem)):
-            print(elem)
+def main2():
+    with connect('mokrwaze.db') as bdd:
+        cursor = bdd.cursor()
+        cursor.execute(
+            """CREATE TABLE IF NOT EXISTS Mokrwaze(
+    id INTEGER PRIMARY KEY,
+    mo_num INTEGER,
+    ligne TEXT
+)""")
+    length = 5
+    sequences = list()
+    k = 1
+    dico_process = defaultdict()
+    industrie = initialise_memoire(i=length, k=k, sequences=sequences)
+    if k == 1:
+        for i in range(length):
+            print(i, i)
+            dico_process[(i, i)] = Process(target=procedure_grille, args=(length, (i, i), industrie, cursor))
+            dico_process[(i, i)].start()
+            # dico_process[(i, i)].join()
+        exit()
+    elif k == 2:
+        for i in range(length):
+            for j in range(length):
+                dico_process[(i, j)] = Process(target=procedure_grille, args=(length, (i, j), industrie, cursor))
+                dico_process[(i, i)].start()
+                dico_process[(i, i)].join()
 
 
 if __name__ == '__main__':
-    main()
+    main2()

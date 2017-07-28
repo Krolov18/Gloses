@@ -88,17 +88,16 @@ def powerset_tostring(seq, ks, var_u, var_e, extend):
 
 def main2():
     global seq, var_u, var_e, extend
-    import itertools
     from Exercise_Type.combinations import combinations
     import multiprocessing
-    seq = 'ant'
+    seq = 'abaca'
     var_u = Variable('.')
     var_e = Variable('.+')
     extend = True
     print(list(combinations(len(seq))))
     with multiprocessing.Pool(10) as proc:
         args = map(lambda x: (seq, x, var_u, var_e, extend), combinations(len(seq)))
-        print(proc.starmap(powerset_tostring, args))
+        print(len(proc.starmap(powerset_tostring, args)))
 
 
 def dump(x: list, y: sqlite3.Cursor) -> None:

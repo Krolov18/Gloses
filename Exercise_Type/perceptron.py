@@ -2,6 +2,7 @@
 from chest import Chest
 from multiprocessing import Process, Pool, Queue, Manager
 from collections import defaultdict
+import re
 from Exercise_Type.Powerset import powerset_tostring
 from Exercise_Type.combinations import combinations
 from Exercise_Type.Powerset import Variable
@@ -13,6 +14,55 @@ from codecs import open
 import psycopg2
 from psycopg2 import sql
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+
+
+def skip_duplicates(iterable, key=lambda x: x):
+    """
+        http://sametmax.com/saffranchir-des-doublons-dun-iterable-en-python/
+    :param iterable:
+    :param key:
+    :return:
+    """
+    # on va mettre l’empreinte unique de chaque élément dans ce set
+    fingerprints = set()
+
+    for x in iterable:
+        # chaque élement voit son emprunte calculée. Par défaut l’empreinte
+        # est l'élément lui même, ce qui fait qu'il n'y a pas besoin de
+        # spécifier 'key' pour des primitives comme les ints ou les strings.
+        fingerprint = key(x)
+
+        # On vérifie que l'empreinte est dans la liste des empreintes  des
+        # éléments précédents. Si ce n'est pas le cas, on yield l'élément, et on
+        # rajoute sont empreinte ans la liste de ceux trouvés, donc il ne sera
+        # pas yieldé si on ne le yieldera pas une seconde fois si on le
+        # rencontre à nouveau
+        if fingerprint not in fingerprints:
+            yield x
+            fingerprints.add(fingerprint)
+
+
+def remove_duplicates(lst, equals=lambda x, y: x == y):
+    """
+        http://sametmax.com/saffranchir-des-doublons-dun-iterable-en-python/
+    :param lst:
+    :param equals:
+    :return:
+    """
+    if not isinstance(lst, list):
+        raise TypeError('This function works only with lists.')
+    i1 = 0
+    l = (len(lst) - 1)
+    while i1 < l:
+        elem = lst[i1]
+        i2 = i1 + 1
+        while i2 <= l:
+            if equals(elem, lst[i2]):
+                del lst[i2]
+                l -= 1
+            i2 += 1
+        i1 += 1
+    return lst
 
 
 class Perceptron(object):
@@ -241,73 +291,59 @@ def procedure_powerset(sequences_queue: Queue, examples_queue: Queue, examples: 
             examples_queue.put((i, classe, examples.get(sequence)))
 
 
-def maj(sequences, classes, features, data, cursor, debug=False):
-    add_value_cmd = "INSERT INTO Examples(example_id,class_id,feature_id,value) VALUES (?,?,?,0.0)"
-    select_ids = 'SELECT Classes.id,Features.id from Classes,Features WHERE Classes.classe=? and Features.feature=?'
+def maj(sequences, classes, features, data, cursor: sqlite3.Cursor, debug=False):
+    add_value_cmd = "INSERT INTO Examples(corpus_id,class_id,feature_id,value) VALUES (?,?,?,0.0)"
+    select_ids = '''SELECT Corpus.id,Classes.id,Features.id
+FROM Corpus,Classes,Features
+WHERE Corpus.sequence=? AND Classes.classe=? AND Features.feature=?'''
     add_classes_cmd = "INSERT OR IGNORE INTO Classes(classe) VALUES (?)"
     add_features_cmd = "INSERT OR IGNORE INTO Features(feature) VALUES (?)"
     add_sequence_cmd = "INSERT OR IGNORE INTO Corpus(sequence) VALUES (?)"
-
+    cursor.execute('BEGIN')
     to_tuple = lambda x: (x,)
     to_tuple_seq = lambda t: map(to_tuple, iter(t))
-    if debug:
-        print("màj temporaire", file=stderr)
 
     # màj des séquences du corpus
-    if debug:
-        print("màj corpus", file=stderr)
     cursor.executemany(add_sequence_cmd, to_tuple_seq(sequences))
     sequences.clear()
 
     # màj des classes
-    if debug:
-        print("màj classes", file=stderr)
     cursor.executemany(add_classes_cmd, to_tuple_seq(classes))
     classes.clear()
 
     # màj des features
-    if debug:
-        print("màj features", file=stderr)
     cursor.executemany(add_features_cmd, to_tuple_seq(features))
     features.clear()
 
     # màj des examples
-    if debug:
-        print("màj examples", file=stderr)
-    example_numbers = map(lambda x: (x[0],), iter(data))
-    ids = map(lambda x: x[1:], iter(data))
     cursor.executemany(
         add_value_cmd,
         list(
             map(
-                lambda x: x[0] + x[1],
-                zip(
-                    example_numbers,
-                    map(
-                        lambda cc: cursor.execute(select_ids, cc).fetchone(),
-                        ids
-                    )
-                )
+                lambda x: cursor.execute(select_ids, x).fetchone(),
+                data
             )
         )
     )
+    if debug:
+        print("màj effectuée", file=stderr)
 
 
 def alpha(i: int, j: int, classe: str, regex: str, sequence: str, seuil: int, sequences: set, classes: set,
           features: set, data: set, bdd, cursor, debug: bool=False):
-    # if debug:
-    #     print("alpha: ", i, j, classe, regex, file=stderr)
+    if debug:
+        print("alpha: ", i, j, classe, regex, file=stderr)
     if i == seuil:
+        print()
         maj(sequences=sequences, classes=classes, features=features, data=data, cursor=cursor, debug=False)
         bdd.commit()
     classes.add(classe)
     features.add(regex)
     sequences.add(sequence)
-    sortie = (j, classe, regex)
-    data.add(sortie)
+    data.add((sequence, classe, regex))
 
 
-def procedure_corpus(corpus, bdd, cursor, seuil: int = 10000,
+def procedure_corpus(corpus, bdd: sqlite3.Connection, cursor: sqlite3.Cursor, seuil: int = 10000,
                      debug: bool = False) -> None:
     i = 0
     data = set()
@@ -339,7 +375,18 @@ def procedure_corpus(corpus, bdd, cursor, seuil: int = 10000,
                 if i == seuil:
                     i = 0
                 i += 1
-    maj(sequences, classes, features, data, cursor, debug=False)
+    maj(sequences, classes, features, data, cursor, debug=True)
+    bdd.commit()
+
+
+def procedure_corpus2(corpus: list, debug: bool=False):
+    for (j, sequence) in enumerate(corpus, start=1):
+        if debug:
+            print("procedure: ", len(corpus) - j, sequence, file=stderr)
+        with Pool(10) as proc:
+            args = map(lambda x: (sequence, x, Variable('.'), Variable('..*'), True), combinations(len(sequence)))
+            for regex in proc.starmap(powerset_tostring, list(args)):
+                yield regex
 
 
 def procedure_tfidf(queue: Queue, bdd, cursor, corpus, debug=False):
@@ -363,33 +410,33 @@ def procedure_tfidf(queue: Queue, bdd, cursor, corpus, debug=False):
 
 def create_tables(cursor):
     examples = """CREATE TABLE IF NOT EXISTS Examples (
-    id INTEGER PRIMARY KEY,
-    example_id INTEGER,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    corpus_id INTEGER,
     class_id INTEGER,
     feature_id INTEGER,
     value REAL,
-    foreign key (class_id) REFERENCES Classes(id)
-    foreign key (feature_id) REFERENCES Features(id)
+    foreign key (class_id) REFERENCES Classes(id),
+    foreign key (feature_id) REFERENCES Features(id),
+    foreign key (corpus_id) REFERENCES Corpus(id),
+    unique (corpus_id,class_id,feature_id) ON CONFLICT IGNORE
 )"""
     classes = """CREATE TABLE IF NOT EXISTS Classes (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     classe TEXT UNIQUE
-)
-"""
+)"""
     features = """CREATE TABLE IF NOT EXISTS Features (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     feature TEXT UNIQUE
-)
-"""
+)"""
     corpus = """CREATE TABLE IF NOT EXISTS Corpus (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sequence STRING UNIQUE
-)
-"""
-    cursor.execute(examples)
-    cursor.execute(classes)
-    cursor.execute(features)
-    cursor.execute(corpus)
+)"""
+    cursor.executescript(";\n".join([examples, classes, features, corpus])+";")
+    # cursor.execute(examples)
+    # cursor.execute(classes)
+    # cursor.execute(features)
+    # cursor.execute(corpus)
 
 
 def deepcopy(d: object):
@@ -525,13 +572,13 @@ def main2():
 
 
 def main3():
-    perceptron_bdd = '/Volumes/RESEARCH/Research/Perceptron.db'
+    perceptron_bdd = 'Perceptron.db'
     lexicon_bdd = 'Lexique.db'
     lexicon = sqlite3.connect(database=lexicon_bdd)
     lexicon_cursor = lexicon.cursor()
-    lexicon_cursor.execute("SELECT * FROM sqlite_master")
+    # lexicon_cursor.execute("SELECT * FROM sqlite_master")
     # print(lexicon_cursor.fetchall()[0][-1])
-
+    dico = defaultdict(set)
     eee = """CREATE TABLE IF NOT EXISTS Lexique381 (
     ortho TEXT,
     phon TEXT,
@@ -569,7 +616,15 @@ def main3():
     nbmorph TEXT
 )"""
     lexicon_cursor.execute("SELECT cgram,ortho FROM Lexique")
-    corpus = lexicon_cursor.fetchall()
+    corpus = sorted(skip_duplicates(lexicon_cursor.fetchall()), key=lambda x: len(x[1]))
+    corpus = [('ADV', 'constitutionnel'), ('ADV', 'constitutionnel'), ('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel')]
+    # print(corpus)
+    # for j, regex in enumerate(procedure_corpus2(corpus=corpus, debug=True)):
+    #     print(j, regex)
+    #     for i, sequence in enumerate(corpus):
+    #         if re.search(regex, sequence):
+    #             dico[regex].add(sequence)
+    # print(*["\t".join((x, ",".join(y))) for (x,y) in dico.items() if len(y)>1], sep='\n', file=open('temporaire1.txt', 'w', 'utf-8'))
     bdd = sqlite3.connect(perceptron_bdd, timeout=10)
     bdd_cursor = bdd.cursor()
 
@@ -578,14 +633,14 @@ def main3():
     bdd_cursor.execute('pragma main.locking_mode=EXCLUSIVE')
     bdd_cursor.execute('pragma main.synchronous=NORMAL')
     bdd_cursor.execute('pragma main.journal_mode=WAL')
-    bdd_cursor.execute('pragma main.cache_size=5000')
+    bdd_cursor.execute('pragma main.cache_size=1000000')
     create_tables(cursor=bdd_cursor)
     bdd.commit()
-    sequences = list(map(lambda x: x[1], corpus))
-    bdd_cursor.execute('SELECT DISTINCT example_id FROM Examples order by example_id asc')
+    # sequences = list(map(lambda x: x[1], corpus))
+    # bdd_cursor.execute('SELECT DISTINCT example_id FROM Examples order by example_id asc')
     # print(bdd_cursor.fetchone())
     # tfidf_queue = Queue()
-    procedure_corpus(corpus=corpus, bdd=bdd, cursor=bdd_cursor, seuil=100, debug=True)
+    procedure_corpus(corpus=corpus, bdd=bdd, cursor=bdd_cursor, seuil=10000000, debug=True)
     # tfidf_process = Process(target=procedure_tfidf, args=(tfidf_queue, bdd, bdd_cursor, sequences, True))
     # tfidf_process.start()
     # tfidf_process.join()
