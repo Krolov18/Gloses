@@ -1,14 +1,14 @@
 # coding: utf-8
 import operator
-from itertools import chain
 from copy import deepcopy
 import re
 import numpy
 from collections import defaultdict
 import itertools
-from multiprocessing import Process, Queue
+from multiprocessing import Process, Queue, Pool
 from sqlite3 import Cursor, connect
 import sys
+import typing
 
 
 class InfiniteDict(defaultdict):
@@ -17,7 +17,7 @@ class InfiniteDict(defaultdict):
 
 
 def liste_resultats(sequence):
-    return chain(*sequence)
+    return itertools.chain(*sequence)
 
 
 def neutralise(chaine):
@@ -127,7 +127,7 @@ def initialise(i, grid=None):
         x = len(grid)
         y = len(grid[0])
         if operator.add(x, y) == i:
-            for (k, v) in zip(range(1, i + 1), chain(*zip(grid, transpose(grid)))):
+            for (k, v) in zip(range(1, i + 1), itertools.chain(*zip(grid, transpose(grid)))):
                 sortie[k] = deepcopy(champs)
                 sortie[k]['regex'] = v
             return sortie
@@ -381,6 +381,174 @@ def ff(bdd, i):
             print(elem)
 
 
+def procedure_grille(length: int, inds: tuple, industrie: defaultdict, bdd: Cursor):
+    i = 0
+    while True:
+        if inds == (0, 0):
+            id1 = (inds[0] + 1, inds[1])
+            id2 = (inds[0], inds[1] + 1)
+            [industrie[id1].reception.put(x) for x in industrie[inds].memoire]
+            [industrie[id2].reception.put(x) for x in industrie[inds].memoire]
+        else:
+            print("lecture:", inds, file=sys.stderr)
+            grille = industrie[inds].reception.get()
+            print(type(grille))
+            for grid in industrie.get(inds).memooire:
+                calcul = add(grille, grid)
+                if calcul is not None:
+                    id1 = (inds[0] + 1, inds[1])
+                    id2 = (inds[0], inds[1] + 1)
+                    industrie[id1].reception.put(calcul)
+                    industrie[id2].reception.put(calcul)
+        if inds == (length, length):
+            grille = industrie[inds].reception.get()
+            print(grille)
+            i += 1
+            cmd = "INSERT INTO Mokrwaze(mo_num, ligne) VALUES (?, ?)"
+            bdd.executemany(cmd, ["".join(x) for x in grille])
+
+
+def initialise_memoire(i: int, k: int, sequences: list):
+    from itertools import combinations
+    from numpy import chararray
+    from collections import defaultdict
+
+    struc = defaultdict(Zone)
+    if k == 1:
+        for r in range(i):
+            grid = chararray((i, i))
+            for (x, y) in combinations(iterable=sequences, r=2):
+                grid[r] = list(x)
+                grid[:, r] = list(y)
+                struc[(r, r)].memoire = grid
+    elif k == 2:
+        for r in range(i):
+            for s in range(i):
+                grid = chararray((i, i))
+                for v, w in combinations(iterable=sequences, r=2):
+                    grid[r] = list(v)
+                    grid[:, s] = list(w)
+                    struc[(r, s)].memoire = grid
+    return struc
+
+
+class Zone(object):
+    def __init__(self, outputs, func=lambda x, y: (x,y)):
+        self.envoi = Queue()
+        self.reception = Queue()
+        self.traitement = Queue()
+        self.memoire = set()
+        self.process_traitement = Process(target=self.procedure_traitement, args=(func,))
+        self.process_envoi = Process(target=self.procedure_envoi, args=(outputs,))
+        self.process_reception = Process(target=self.procedure_reception)
+        self.process_traitement.start()
+        self.process_envoi.start()
+        self.process_reception.start()
+        self.process_traitement.join()
+        self.process_envoi.join()
+        self.process_reception.join()
+
+    def procedure_envoi(self, outputs):
+        while True:
+            if not self.envoi.empty():
+                tmp = self.envoi.get()
+                for zone in outputs:
+                    zone.reception.put(tmp)
+
+    def procedure_reception(self):
+        while True:
+            if not self.reception.empty():
+                tmp = self.reception.get()
+                self.traitement.put(tmp)
+
+    def procedure_traitement(self, func):
+        while True:
+            if not self.traitement.empty():
+                elem = func(self.traitement.get())
+                if elem is not None:
+                    self.envoi.put(elem)
+
+
+    def initialise(self, n, infos):
+        zones = list()
+        zones.append(Zone(infos, (1,1), lambda x, y: x.add(y)))
+
+
+class Grid(object):
+    def __init__(self, shape, itemsize=1, unicode=False, buffer=None, offset=0,
+                 strides=None, order='C', jonction=(), symmetric=False):
+        self.grille = numpy.chararray(
+            shape,
+            itemsize=itemsize,
+            unicode=unicode,
+            buffer=buffer,
+            offset=offset,
+            strides=strides,
+            order=order
+        )
+        self.jonction = jonction
+        self.symmetric = symmetric
+
+    def __repr__(self): return str(self.grille)
+
+    def __str__(self): return repr(self)
+
+    def is_symmetric(self):
+        return (self.grille[self.jonction[0]] == self.grille[:, self.jonction[1]]).all()
+
+    def naive_add(self, other) -> typing.Union[numpy.chararray, None]:
+        g3 = numpy.chararray(shape=self.grille.shape)
+        for i in self.grille:
+            for j in self.grille:
+                if self.grille[i, j] == other.grille[i, j]:
+                    g3[i][j] = self.grille[i][j]
+                elif (self.grille[i][j] + other.grille[i][j]) == (self.grille[i][j] or other.grille[i][j]):
+                    g3[i][j] = (self.grille[i][j] or other.grille[i][j])
+                else:
+                    return None
+        return g3
+
+    def add_optimise(self, other):
+        """
+            le i passé en paramètre permet de restreindre drastiquement le nombre de comparaison.
+            Si i > 0 alors on comparé (g1[], g1[])
+        :param g1:
+        :param g2:
+        :param i:
+        :return:
+        """
+        g3 = self.grille.copy()
+        (x, y) = other.jonction
+        verif = ((x-1, x), (y, y-1))
+        if (self.grille[verif[0]] == other.grille[verif[0]]) and (self.grille[verif[1]] == other.grille[verif[1]]):
+            for i in range(x, g3.shape[0]):
+                for j in range(y, g3.shape[0]):
+                    g3[i, j] = other.grille[i, j]
+
+
+
+def genere_structure(corpus: list, n: int, i: int):
+    assert all(len(x) == n for x in corpus)
+    assert i < n
+
+    def f(*args):
+        (mot1, mot2, i) = args
+        array = Grid(shape=(n, n), unicode=True)
+        array.jonction = (i, i)
+        array.symmetric = mot1 == mot2
+        array.grille[i] = list(mot1)
+        array.grille[:, i] = list(mot2)
+        return array
+
+    # struc = dict()
+
+    # struc[i] = dict()
+    dd = list()
+    for k, g in itertools.groupby(corpus, lambda x: x[i]):
+        dd.extend(g)
+    return i, ((i+1, i), (i, i+1)) if i < n else None, itertools.starmap(f, map(lambda x: x + (i,), itertools.product(dd, repeat=2)))
+
+
 def main():
     import argparse
     import sqlite3
@@ -435,78 +603,6 @@ def main():
     # procedure_mokrwaze_1(taille=taille, bdd=bdd, grid=args.grid, debug=args.verbose)
 
 
-def procedure_grille(length: int, inds: tuple, industrie: defaultdict, bdd: Cursor):
-    i = 0
-    while True:
-        if inds == (0, 0):
-            id1 = (inds[0] + 1, inds[1])
-            id2 = (inds[0], inds[1] + 1)
-            [industrie[id1].reception.put(x) for x in industrie[inds].memoire]
-            [industrie[id2].reception.put(x) for x in industrie[inds].memoire]
-        else:
-            print("lecture:", inds, file=sys.stderr)
-            grille = industrie[inds].reception.get()
-            print(type(grille))
-            for grid in industrie.get(inds).memooire:
-                calcul = add(grille, grid)
-                if calcul is not None:
-                    id1 = (inds[0] + 1, inds[1])
-                    id2 = (inds[0], inds[1] + 1)
-                    industrie[id1].reception.put(calcul)
-                    industrie[id2].reception.put(calcul)
-        if inds == (length, length):
-            grille = industrie[inds].reception.get()
-            print(grille)
-            i += 1
-            cmd = "INSERT INTO Mokrwaze(mo_num, ligne) VALUES (?, ?)"
-            bdd.executemany(cmd, ["".join(x) for x in grille])
-
-
-
-def add(g1: numpy.chararray, g2: numpy.chararray):
-    g3 = numpy.chararray(shape=g1.shape)
-    for i in g1:
-        for j in g1:
-            if g1[i][j] == g2[i][j]:
-                g3[i][j] = g1[i][j]
-            elif (g1[i][j] + g2[i][j]) == (g1[i][j] or g2[i][j]):
-                g3[i][j] = (g1[i][j] or g2[i][j])
-            else:
-                return None
-    return g3
-
-
-def initialise_memoire(i: int, k: int, sequences: list):
-    from itertools import combinations
-    from numpy import chararray
-    from collections import defaultdict
-
-    struc = defaultdict(Zone)
-    if k == 1:
-        for r in range(i):
-            grid = chararray((i, i))
-            for (x, y) in combinations(iterable=sequences, r=2):
-                grid[r] = list(x)
-                grid[:, r] = list(y)
-                struc[(r, r)].memoire = grid
-    elif k == 2:
-        for r in range(i):
-            for s in range(i):
-                grid = chararray((i, i))
-                for v, w in combinations(iterable=sequences, r=2):
-                    grid[r] = list(v)
-                    grid[:, s] = list(w)
-                    struc[(r, s)].memoire = grid
-    return struc
-
-
-class Zone(object):
-    def __init__(self):
-        # self.envoi = Queue()
-        self.reception = Queue()
-        self.memoire = defaultdict(lambda: defaultdict(set))
-
-
 def main2():
     with connect('mokrwaze.db') as bdd:
         cursor = bdd.cursor()
@@ -536,5 +632,25 @@ def main2():
                 dico_process[(i, i)].join()
 
 
+def main3():
+    n = 3
+    with connect('Lexique.db') as corpus:
+        corpus_curs = corpus.cursor()
+    lexique = list(itertools.chain(*corpus_curs.execute('select distinct ortho from lexique where length(ortho)=?', (n,)).fetchall()))
+    tmp = genere_structure(lexique, n, 1)
+    print(tmp, next(tmp[-1]))
+    print(tmp, next(tmp[-1]))
+    # task_queue = Queue()
+
+    # for x in tmp:
+    #     task_queue.put(x)
+
+
+def worker(input, output):
+    for func, args in iter(input.get, 'STOP'):
+        result = calculate(func, args)
+        output.put(result)
+
+
 if __name__ == '__main__':
-    main2()
+    main3()

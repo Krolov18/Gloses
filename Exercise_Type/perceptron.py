@@ -1,19 +1,249 @@
 # coding: utf-8
 from chest import Chest
 from multiprocessing import Process, Pool, Queue, Manager
-from collections import defaultdict
-import re
+from collections import defaultdict, deque
+# import re
 from Exercise_Type.Powerset import powerset_tostring
 from Exercise_Type.combinations import combinations
 from Exercise_Type.Powerset import Variable
 from Exercise_Type.tfidf import tf_idf
 from sys import stderr
-from itertools import chain
+from heapdict import heapdict
+from itertools import chain, product
 import sqlite3
-from codecs import open
-import psycopg2
-from psycopg2 import sql
-from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+import string
+# from codecs import open
+# import psycopg2
+# from psycopg2 import sql
+# from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+
+
+class Point(object):
+    def __init__(self, string):
+        self.string = string
+
+    def __repr__(self):
+        return self.string
+
+    def __str__(self):
+        return repr(self)
+
+    def __hash__(self):
+        return 1
+
+    def __eq__(self, other):
+        return str(self) == str(other)
+
+
+class OptimString:
+    def __init__(self, seq: list, point: Point, pointee=None, control=None):
+        self.__point = point
+        self.__data = seq
+        self.__data_pointe = list(seq) if not pointee else pointee
+        self.__control = defaultdict(deque) if not control else control
+        if not self.__control:
+            self.__remplir_control(seq)
+        tmp = list(filter(lambda x: isinstance(x, str), self.__data_pointe))
+        self.__first = tmp[0] if tmp else ''
+
+    @property
+    def first(self):
+        return self.__first
+
+    @property
+    def get_point(self):
+        return self.__point
+
+    @property
+    def data_pointe(self):
+        return self.__data_pointe
+
+    @data_pointe.setter
+    def data_pointe(self, value):
+        pass
+
+    @property
+    def data(self):
+        return self.__data
+
+    @property
+    def control(self):
+        return self.__control
+
+    def etendre(self):
+        l = list()
+        n_p = None
+        for x in self.data_pointe:
+            if not isinstance(x, Point):
+                if n_p is not None:
+                    l.append(n_p)
+                    n_p = None
+                l.append(x)
+            else:
+                if n_p is None:
+                    n_p = x
+                else:
+                    n_p = Point('.+')
+        if n_p is not None:
+            l.append(n_p)
+        return OptimString(point=Point('.+'), seq=l)
+
+    def __remplir_control(self, seq): list(
+        map(lambda x: self.control[x[0]].append(x[1]), self.__inverse_enumerate(seq=seq))
+    )
+
+    def trier_control(self): return heapdict(self.control)
+
+    @staticmethod
+    def __inverse_enumerate(seq):
+        """
+            On inverse clé,valeur de enumerate(sequence).
+        :return:
+        """
+        return ((t, y) for y, t in enumerate(seq))
+
+    def add_point(self):
+        data_pointe = deepcopy(self.data_pointe)
+        control = deepcopy(self.control)
+
+        if self.get_point not in control:
+            data_pointe[0] = self.get_point
+            control[self.get_point].append(0)
+        else:
+            if isinstance(data_pointe[-1], Point):
+                return OptimString(point=self.__point, seq=self.data, pointee=data_pointe, control=control)
+
+            pt = control.get(self.get_point)[-1]
+            data_pointe[pt+1] = self.get_point
+            control.get(self.get_point).append(pt+1)
+
+        return OptimString(point=self.__point, seq=self.data, pointee=data_pointe, control=control)
+
+    def deplace_point(self):
+        data_pointe = deepcopy(self.data_pointe)
+        control = deepcopy(self.control)
+
+        if self.get_point not in control:
+            return self
+
+        pt = control.get(self.get_point)[-1]
+        if pt == len(self.__data)-1:
+            return OptimString(point=self.__point, seq=self.data, pointee=data_pointe, control=control)
+        else:
+            control[self.get_point][-1] += 1
+            data_pointe[pt] = self.__data[pt]
+            data_pointe[pt+1] = self.get_point
+        return OptimString(point=self.__point, seq=self.data, pointee=data_pointe, control=control)
+
+    def __repr__(self):
+        return "".join(map(lambda x: str(x), self.data_pointe))
+
+    def __str__(self):
+        return repr(self)
+
+    def __eq__(self, other):
+        return self.data_pointe == other.data_pointe
+
+    def __hash__(self):
+        return 1
+
+
+def escape_char(x):
+    return "\\"+x if ((str(x) in string.punctuation) and isinstance(x, str)) else str(x)
+
+
+def generate_regex(seq: OptimString, classes, cursor: sqlite3.Cursor):
+    """
+        powerset appliqué selon la logique d'un parcours en largeur d'un graphe.
+    :param seq: chaine de caractère OptimString plus optimisé que str
+    :param classes: liste de classes
+    :param cursor: cursuer d'une db sqlite3
+    :return: None
+    """
+    doublon = None
+
+    add_value_cmd = """INSERT INTO Examples(corpus_id,class_id,feature_id)
+    SELECT Corpus.id,Classes.id,Features.id
+    FROM Corpus,Classes,Features
+    WHERE Corpus.sequence=?
+    AND Classes.classe=?
+    AND Features.feature=?;
+    """
+    add_value_cmd_2 = "INSERT OR ROLLBACK INTO Examples(corpus_id,class_id,feature_id) VALUES (?,?,?);"
+    add_classes_cmd = "INSERT OR ROLLBACK INTO Classes(classe) VALUES (?);"
+    add_features_cmd = "INSERT OR ROLLBACK INTO Features(feature) VALUES (?);"
+    add_sequence_cmd = "INSERT OR ROLLBACK INTO Corpus(sequence) VALUES (?);"
+    add_genealogie_cmd = "INSERT OR ROLLBACK INTO Genealogie(pere_id, descendant_id) VALUES (?,?);"
+    select_feature = "SELECT id FROM Features WHERE feature IN ({});"
+    select_classe = "SELECT id FROM Classes WHERE classe IN ({});"
+    select_descendant = "SELECT descendant_id FROM genealogie WHERE pere_id IN ({});"
+
+    seq_id = cursor.execute(select_feature.format(",".join(["?"]*len((str(seq),)))), (str(seq),)).fetchone()
+    str_seq = str(seq)
+
+    file = deque()
+
+    file.appendleft(seq)
+
+    while file:
+        current = file.pop()
+        str_current = str(current.etendre())
+
+        cursor.execute(add_features_cmd, (str_current,))
+        # vérification de la présence de current dans la database
+        cursor.execute(select_feature.format(",".join(["?"]*len((str_current,)))), (str_current,))
+        feat = cursor.fetchone()
+        cursor.execute(select_descendant.format(",".join(["?"]*len(feat))), feat)
+        descendant_ids = list(filter(lambda x: x != ('NULL',), cursor.fetchall()))
+        # cursor.execute("select feature from features where ID in (select pere_id from genealogie)").fetchall()
+        if descendant_ids:
+            classe_ids = cursor.execute(select_classe.format(",".join(["?"]*len(classes))), classes).fetchall()
+            cursor.executemany(
+                add_value_cmd_2, map(lambda x: (x[0] + x[1] + x[2]), product([seq_id], classe_ids, descendant_ids))
+            )
+        else:
+            # mettre à jour features
+            cursor.execute(add_features_cmd, (str_current,))
+            if str_seq != str_current:
+                tmp = (str_seq, str_current if not all(x == '.' for x in str_current) else 'NULL')
+                if tmp != doublon:
+                    if isinstance(current.data_pointe[-1], Point):
+                        # mettre à jour généalogie
+                        cursor.execute(
+                            add_genealogie_cmd,
+                            cursor.execute(
+                                select_feature.format(",".join(["?"]*len((str_current,)))),
+                                (str_current,)
+                            ).fetchone() + ("NULL",)
+                        )
+                    else:
+                        # mettre à jour généalogie
+                        cursor.execute(add_genealogie_cmd,
+                                       seq_id + cursor.execute(select_feature.format(",".join(["?"]*len((str_current,)))), (str_current,)).fetchone()
+                                       )
+                    # mettre à jour les exemples
+                    cursor.executemany(add_value_cmd, map(lambda x: (str_seq, x, str_current), classes))
+                doublon = tmp
+            if not isinstance(current.data_pointe[-1], Point):
+                old = str_current
+                current = current.add_point()
+                str_current = str(current.etendre())
+                tmp = (old, str_current if not all(x == '.' for x in str_current) else 'NULL')
+                if tmp != doublon:
+                    # mettre à jour features
+                    cursor.execute(add_features_cmd, (str_current,))
+                    # mettre à jour les exemples
+                    cursor.executemany(add_value_cmd, map(lambda x: (str_seq, x, str_current), classes))
+                    # mettre à jour généalogie
+                    # print(str_current)
+                    # print(cursor.execute(select_feature, (str_current,)).fetchone())
+                    cursor.execute(add_genealogie_cmd, seq_id + cursor.execute(select_feature.format(",".join(["?"]*len((str_current,)))), (str_current,)).fetchone())
+                if not all(x == '.' for x in str_current):
+                    file.appendleft(current)
+                for _ in range(current.control.get(current.get_point)[-1]+1, len(current.data)):
+                    current = current.deplace_point()
+                    file.appendleft(current)
+                doublon = tmp
 
 
 def skip_duplicates(iterable, key=lambda x: x):
@@ -257,7 +487,7 @@ def procedure_example(examples_queue, test_queue, weights):
                 )
 
 
-def procedure_test(test_set):
+def procedure_test(test_set, weights):
     """
         Si une classe du test_set n'est pas dans le train_set, l'example est ignoré
         si une dimension n'est pas dans les features, ont la classifie sous le nom ##OUTLAW##
@@ -334,7 +564,6 @@ def alpha(i: int, j: int, classe: str, regex: str, sequence: str, seuil: int, se
     if debug:
         print("alpha: ", i, j, classe, regex, file=stderr)
     if i == seuil:
-        print()
         maj(sequences=sequences, classes=classes, features=features, data=data, cursor=cursor, debug=False)
         bdd.commit()
     classes.add(classe)
@@ -379,14 +608,20 @@ def procedure_corpus(corpus, bdd: sqlite3.Connection, cursor: sqlite3.Cursor, se
     bdd.commit()
 
 
-def procedure_corpus2(corpus: list, debug: bool=False):
-    for (j, sequence) in enumerate(corpus, start=1):
+def procedure_corpus2(n: int, corpus, cursor: sqlite3.Cursor, debug: bool=False):
+    for (j, (classes, sequence)) in corpus:
         if debug:
-            print("procedure: ", len(corpus) - j, sequence, file=stderr)
-        with Pool(10) as proc:
-            args = map(lambda x: (sequence, x, Variable('.'), Variable('..*'), True), combinations(len(sequence)))
-            for regex in proc.starmap(powerset_tostring, list(args)):
-                yield regex
+            print("procedure: ", n - j, sequence, file=stderr)
+        add_features_cmd = "INSERT OR ROLLBACK INTO Features(feature) VALUES (?);"
+        add_classes_cmd = "INSERT OR ROLLBACK INTO Classes(classe) VALUES (?);"
+        cursor.execute('BEGIN TRANSACTION;')
+        cursor.execute(add_features_cmd, (sequence,))
+        cursor.executemany(add_classes_cmd, zip(classes))
+        generate_regex(
+            OptimString(sequence, Point('.'), pointee=None, control=None),
+            classes=classes,
+            cursor=cursor
+        )
 
 
 def procedure_tfidf(queue: Queue, bdd, cursor, corpus, debug=False):
@@ -428,15 +663,19 @@ def create_tables(cursor):
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     feature TEXT UNIQUE
 )"""
-    corpus = """CREATE TABLE IF NOT EXISTS Corpus (
+#     corpus = """CREATE TABLE IF NOT EXISTS Corpus (
+#     id INTEGER PRIMARY KEY AUTOINCREMENT,
+#     sequence STRING UNIQUE
+# )"""
+    genealogie = """CREATE TABLE IF NOT EXISTS Genealogie (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sequence STRING UNIQUE
+    pere_id INTEGER NOT NULL,
+    descendant_id INTEGER,
+    FOREIGN KEY (pere_id) REFERENCES Features(id),
+    FOREIGN KEY (descendant_id) REFERENCES Featues(id),
+    UNIQUE (pere_id,descendant_id) ON CONFLICT IGNORE
 )"""
-    cursor.executescript(";\n".join([examples, classes, features, corpus])+";")
-    # cursor.execute(examples)
-    # cursor.execute(classes)
-    # cursor.execute(features)
-    # cursor.execute(corpus)
+    cursor.executescript(";\n".join([examples, classes, features, genealogie]) + ";")
 
 
 def deepcopy(d: object):
@@ -578,46 +817,10 @@ def main3():
     lexicon_cursor = lexicon.cursor()
     # lexicon_cursor.execute("SELECT * FROM sqlite_master")
     # print(lexicon_cursor.fetchall()[0][-1])
-    dico = defaultdict(set)
-    eee = """CREATE TABLE IF NOT EXISTS Lexique381 (
-    ortho TEXT,
-    phon TEXT,
-    lemme TEXT,
-    cgram TEXT,
-    genre TEXT,
-    nombre TEXT,
-    freqlemfilms2 TEXT,
-    freqlemlivres TEXT,
-    freqfilms2 TEXT,
-    freqlivres TEXT,
-    infover STRNG,
-    nbhomogr TEXT,
-    nbhomoph TEXT,
-    islem TEXT,
-    nblettres TEXT,
-    nbphons TEXT,
-    p_cvcv TEXT,
-    voisorth TEXT,
-    voisphon TEXT,
-    puorth TEXT,
-    puphon TEXT,
-    syll TEXT,
-    nbsyll TEXT,
-    cv_cv TEXT,
-    orthrenv TEXT,
-    phonrenv TEXT,
-    orthosyll TEXT,
-    cgramortho TEXT,
-    deflem TEXT,
-    defobs TEXT,
-    old20 TEXT,
-    pld20 TEXT,
-    morphoder TEXT,
-    nbmorph TEXT
-)"""
-    lexicon_cursor.execute("SELECT cgram,ortho FROM Lexique")
-    corpus = sorted(skip_duplicates(lexicon_cursor.fetchall()), key=lambda x: len(x[1]))
-    corpus = [('ADV', 'constitutionnel'), ('ADV', 'constitutionnel'), ('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel'),('ADV', 'constitutionnel')]
+
+    lexicon_cursor.execute("SELECT cgramortho,ortho FROM Lexique order by length(ortho) asc")
+
+    corpus = takewhile(cursor=lexicon_cursor)
     # print(corpus)
     # for j, regex in enumerate(procedure_corpus2(corpus=corpus, debug=True)):
     #     print(j, regex)
@@ -635,15 +838,26 @@ def main3():
     bdd_cursor.execute('pragma main.journal_mode=WAL')
     bdd_cursor.execute('pragma main.cache_size=1000000')
     create_tables(cursor=bdd_cursor)
-    bdd.commit()
     # sequences = list(map(lambda x: x[1], corpus))
     # bdd_cursor.execute('SELECT DISTINCT example_id FROM Examples order by example_id asc')
     # print(bdd_cursor.fetchone())
     # tfidf_queue = Queue()
-    procedure_corpus(corpus=corpus, bdd=bdd, cursor=bdd_cursor, seuil=10000000, debug=True)
+    procedure_corpus2(n=200000, corpus=corpus, cursor=bdd_cursor, debug=True)
+    bdd.commit()
     # tfidf_process = Process(target=procedure_tfidf, args=(tfidf_queue, bdd, bdd_cursor, sequences, True))
     # tfidf_process.start()
     # tfidf_process.join()
+
+
+def takewhile(func=lambda x: (x[0].split(','), x[1]), cursor: sqlite3.Cursor=None):
+    i = 1
+    if cursor is None:
+        return
+    tmp = cursor.fetchone()
+    while tmp is not None:
+        yield (i, func(tmp))
+        tmp = cursor.fetchone()
+        i += 1
 
 
 def get_bdd_size(bdd):
