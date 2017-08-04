@@ -169,11 +169,11 @@ def generate_regex(seq: OptimString, classes, cursor: sqlite3.Cursor):
     AND Classes.classe=?
     AND Features.feature=?;
     """
-    add_value_cmd_2 = "INSERT OR ROLLBACK INTO Examples(corpus_id,class_id,feature_id) VALUES (?,?,?);"
-    add_classes_cmd = "INSERT OR ROLLBACK INTO Classes(classe) VALUES (?);"
-    add_features_cmd = "INSERT OR ROLLBACK INTO Features(feature) VALUES (?);"
-    add_sequence_cmd = "INSERT OR ROLLBACK INTO Corpus(sequence) VALUES (?);"
-    add_genealogie_cmd = "INSERT OR ROLLBACK INTO Genealogie(pere_id, descendant_id) VALUES (?,?);"
+    add_value_cmd_2 = "INSERT OR IGNORE INTO Examples(corpus_id,class_id,feature_id) VALUES (?,?,?);"
+    add_classes_cmd = "INSERT OR IGNORE INTO Classes(classe) VALUES (?);"
+    add_features_cmd = "INSERT OR IGNORE INTO Features(feature) VALUES (?);"
+    add_sequence_cmd = "INSERT OR IGNORE INTO Corpus(sequence) VALUES (?);"
+    add_genealogie_cmd = "INSERT OR IGNORE INTO Genealogie(pere_id, descendant_id) VALUES (?,?);"
     select_feature = "SELECT id FROM Features WHERE feature IN ({});"
     select_classe = "SELECT id FROM Classes WHERE classe IN ({});"
     select_descendant = "SELECT descendant_id FROM genealogie WHERE pere_id IN ({});"
@@ -195,7 +195,6 @@ def generate_regex(seq: OptimString, classes, cursor: sqlite3.Cursor):
         feat = cursor.fetchone()
         cursor.execute(select_descendant.format(",".join(["?"]*len(feat))), feat)
         descendant_ids = list(filter(lambda x: x != ('NULL',), cursor.fetchall()))
-        # cursor.execute("select feature from features where ID in (select pere_id from genealogie)").fetchall()
         if descendant_ids:
             classe_ids = cursor.execute(select_classe.format(",".join(["?"]*len(classes))), classes).fetchall()
             cursor.executemany(
@@ -235,8 +234,6 @@ def generate_regex(seq: OptimString, classes, cursor: sqlite3.Cursor):
                     # mettre à jour les exemples
                     cursor.executemany(add_value_cmd, map(lambda x: (str_seq, x, str_current), classes))
                     # mettre à jour généalogie
-                    # print(str_current)
-                    # print(cursor.execute(select_feature, (str_current,)).fetchone())
                     cursor.execute(add_genealogie_cmd, seq_id + cursor.execute(select_feature.format(",".join(["?"]*len((str_current,)))), (str_current,)).fetchone())
                 if not all(x == '.' for x in str_current):
                     file.appendleft(current)
@@ -608,14 +605,16 @@ def procedure_corpus(corpus, bdd: sqlite3.Connection, cursor: sqlite3.Cursor, se
     bdd.commit()
 
 
-def procedure_corpus2(n: int, corpus, cursor: sqlite3.Cursor, debug: bool=False):
+def procedure_corpus2(corpus, cursor: sqlite3.Cursor, debug: bool=False):
     for (j, (classes, sequence)) in corpus:
         if debug:
-            print("procedure: ", n - j, sequence, file=stderr)
-        add_features_cmd = "INSERT OR ROLLBACK INTO Features(feature) VALUES (?);"
-        add_classes_cmd = "INSERT OR ROLLBACK INTO Classes(classe) VALUES (?);"
+            print("procedure: ", len(corpus) - j, sequence, file=stderr)
+        add_corpus_cmd = "INSERT OR IGNORE INTO Corpus(sequence) VALUES (?);"
+        add_feature_cmd = "INSERT OR IGNORE INTO Features(feature) VALUES (?);"
+        add_classes_cmd = "INSERT OR IGNORE INTO Classes(classe) VALUES (?);"
         cursor.execute('BEGIN TRANSACTION;')
-        cursor.execute(add_features_cmd, (sequence,))
+        cursor.execute(add_feature_cmd, (sequence,))
+        cursor.execute(add_corpus_cmd, (sequence,))
         cursor.executemany(add_classes_cmd, zip(classes))
         generate_regex(
             OptimString(sequence, Point('.'), pointee=None, control=None),
@@ -663,10 +662,10 @@ def create_tables(cursor):
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     feature TEXT UNIQUE
 )"""
-#     corpus = """CREATE TABLE IF NOT EXISTS Corpus (
-#     id INTEGER PRIMARY KEY AUTOINCREMENT,
-#     sequence STRING UNIQUE
-# )"""
+    corpus = """CREATE TABLE IF NOT EXISTS Corpus (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sequence STRING UNIQUE
+)"""
     genealogie = """CREATE TABLE IF NOT EXISTS Genealogie (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     pere_id INTEGER NOT NULL,
@@ -675,7 +674,7 @@ def create_tables(cursor):
     FOREIGN KEY (descendant_id) REFERENCES Featues(id),
     UNIQUE (pere_id,descendant_id) ON CONFLICT IGNORE
 )"""
-    cursor.executescript(";\n".join([examples, classes, features, genealogie]) + ";")
+    cursor.executescript(";\n".join([examples, classes, features, corpus, genealogie]) + ";")
 
 
 def deepcopy(d: object):
@@ -815,12 +814,10 @@ def main3():
     lexicon_bdd = 'Lexique.db'
     lexicon = sqlite3.connect(database=lexicon_bdd)
     lexicon_cursor = lexicon.cursor()
-    # lexicon_cursor.execute("SELECT * FROM sqlite_master")
-    # print(lexicon_cursor.fetchall()[0][-1])
 
-    lexicon_cursor.execute("SELECT cgramortho,ortho FROM Lexique order by length(ortho) asc")
+    lexicon_cursor.execute("SELECT distinct cgramortho,ortho FROM Lexique order by length(ortho) asc")
 
-    corpus = takewhile(cursor=lexicon_cursor)
+    corpus = list(takewhile(cursor=lexicon_cursor))
     # print(corpus)
     # for j, regex in enumerate(procedure_corpus2(corpus=corpus, debug=True)):
     #     print(j, regex)
@@ -831,18 +828,18 @@ def main3():
     bdd = sqlite3.connect(perceptron_bdd, timeout=10)
     bdd_cursor = bdd.cursor()
 
-    bdd_cursor.execute('pragma main.pagesize=4096')
-    bdd_cursor.execute('pragma main.cache_size=-1000000')
-    bdd_cursor.execute('pragma main.locking_mode=EXCLUSIVE')
-    bdd_cursor.execute('pragma main.synchronous=NORMAL')
-    bdd_cursor.execute('pragma main.journal_mode=WAL')
-    bdd_cursor.execute('pragma main.cache_size=1000000')
+    # bdd_cursor.execute('pragma main.pagesize=4096')
+    # bdd_cursor.execute('pragma main.cache_size=-1000000')
+    # bdd_cursor.execute('pragma main.locking_mode=EXCLUSIVE')
+    # bdd_cursor.execute('pragma main.synchronous=NORMAL')
+    # bdd_cursor.execute('pragma main.journal_mode=WAL')
+    # bdd_cursor.execute('pragma main.cache_size=1000000')
     create_tables(cursor=bdd_cursor)
     # sequences = list(map(lambda x: x[1], corpus))
     # bdd_cursor.execute('SELECT DISTINCT example_id FROM Examples order by example_id asc')
     # print(bdd_cursor.fetchone())
     # tfidf_queue = Queue()
-    procedure_corpus2(n=200000, corpus=corpus, cursor=bdd_cursor, debug=True)
+    procedure_corpus2(corpus=corpus, cursor=bdd_cursor, debug=True)
     bdd.commit()
     # tfidf_process = Process(target=procedure_tfidf, args=(tfidf_queue, bdd, bdd_cursor, sequences, True))
     # tfidf_process.start()
