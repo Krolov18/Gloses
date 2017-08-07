@@ -9,11 +9,12 @@ from Exercise_Type.Powerset import Variable
 from Exercise_Type.tfidf import tf_idf
 from sys import stderr
 from heapdict import heapdict
-from itertools import chain, product
+from itertools import chain, product, count
 import sqlite3
 import string
+import functools
 # from codecs import open
-# import psycopg2
+import psycopg2
 # from psycopg2 import sql
 # from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
@@ -556,53 +557,140 @@ WHERE Corpus.sequence=? AND Classes.classe=? AND Features.feature=?'''
         print("màj effectuée", file=stderr)
 
 
-def alpha(i: int, j: int, classe: str, regex: str, sequence: str, seuil: int, sequences: set, classes: set,
-          features: set, data: set, bdd, cursor, debug: bool=False):
+def bfs(descendant: OptimString, func, cursor, pere=None):
+    """
+        Breadth First Search
+    :return:
+    """
+    fifo = deque()
+
+    func(pere, descendant, fifo, cursor)
+    while fifo:
+        pere = fifo.pop()
+        cible = pere.add_point().etendre()
+        if not func(pere, cible, fifo, cursor):
+            for x in range(len(cible)):
+                func(cible, cible.deplace_point().etendre(), fifo, cursor)
+
+
+def func(new: OptimString, fifo: deque, curseur: sqlite3.Cursor, classes, old: OptimString=None) -> bool:
+    cmds = {
+        "select": "SELECT {columns} FROM {tables} WHERE {column} IN ({values}) ",
+        "insert": "INSERT OR IGNORE INTO {table}({columns}) VALUES ({values})",
+        "insert_select": "INSERT OR IGNORE INTO {table}({columns}) {SELECT}"
+    }
+
+    def select_stmnt(columns, tables, column, values):
+        return cmds.get('select').format(",".join(columns), ",".join(tables), column, ",".join(["?"]*len(values)))
+
+    def insert_stmnt(table, columns, values):
+        return cmds.get('insert').format(table, ",".join(columns), ",".join(["?"]*len(values)))
+
+    def insert_select_stmnt(table, columns, select):
+        return cmds.get('insert').format(table, ",".join(columns), select)
+
+    existence = curseur.execute(select_stmnt(('id',), ('features',), ('feature',), (str(new),)), (str(new),)).fetchone()
+    if existence:
+        descendants = curseur.execute(select_stmnt(('descendant_id',), ('Genealogie',), ('pere_id',), existence), existence).fetchall()
+        if descendants:
+            seq_id = curseur.execute(select_stmnt(('id',), ('features',), ('feature',), (str(new),)), (str(new),))
+            classe_ids = curseur.execute(select_stmnt(('id',), ('classes',), ('classe',), classes), classes).fetchall()
+            for args in product(seq_id, classe_ids, descendants):
+                args = functools.reduce(lambda x,y: x+y, args)
+                curseur.execute(insert_stmnt('Examples', ('corpus_id', 'classe_id', 'feature_id'), args), args)
+        return True
+    else:
+        curseur.execute(insert_stmnt('Features', ('feature',), (str(new),)), (str(new),))
+        values = functools.reduce(
+            lambda x, y: x + y,
+            curseur.execute(
+                select_stmnt(('id',), ('Features',), 'feature', (new.data, str(new))),
+                (new.data, str(new))
+            ).fetchall()
+        )
+        curseur.execute(insert_stmnt('Genealogie', ('pere_id', 'descendant_id'), values), values)
+        values = functools.reduce(
+            lambda x, y: x + y,
+            curseur.execute(
+                select_stmnt(('id',), ('Features',), 'feature', (str(old), str(new))),
+                (str(old), str(new))
+            ).fetchall()
+        )
+        curseur.execute(insert_stmnt('Genealogie', ('pere_id', 'descendant_id'), values), values)
+        if isinstance(new.data_pointe[-1], Point):
+            values = functools.reduce(
+                lambda x, y: x + y,
+                curseur.execute(
+                    select_stmnt(('id',), ('Features',), 'feature', (str(new),)),
+                    (str(new),)
+                ).fetchall()
+            )
+            curseur.execute(insert_stmnt('Genealogie', ('pere_id',), values), values)
+        fifo.appendleft(new)
+        return False
+
+
+def alpha(i: int, j: int, classes, regex: str, sequence: str, seuil: int, bdd, bdd_cursor: sqlite3.Cursor, debug: bool=False):
+    add_value_cmd = '''INSERT INTO Examples(corpus_id,class_id,feature_id)
+    SELECT Corpus.id,Classes.id,Features.id
+    FROM Corpus,Classes,Features
+    WHERE Corpus.sequence=? AND
+    Classes.classe=? AND
+    Features.feature=?;'''
+    add_classes_cmd = 'INSERT OR IGNORE INTO Classes(classe) VALUES (?);'
+    add_features_cmd = 'INSERT OR IGNORE INTO Features(feature) VALUES (?);'
+    add_sequences_cmd = 'INSERT OR IGNORE INTO Corpus(sequence) VALUES (?);'
+
     if debug:
-        print("alpha: ", i, j, classe, regex, file=stderr)
+        print("alpha: ", j, i, classes, regex, file=stderr)
     if i == seuil:
-        maj(sequences=sequences, classes=classes, features=features, data=data, cursor=cursor, debug=False)
         bdd.commit()
-    classes.add(classe)
-    features.add(regex)
-    sequences.add(sequence)
-    data.add((sequence, classe, regex))
+        # bdd_cursor.execute('BEGIN TRANSACTION;')
+    [bdd_cursor.execute(add_classes_cmd, (x,)) for x in classes]
+    bdd_cursor.execute(add_features_cmd, (regex,))
+    bdd_cursor.execute(add_sequences_cmd, (sequence,))
+    [bdd_cursor.execute(add_value_cmd, x) for x in map(lambda x: (sequence, x, regex), classes)]
 
 
-def procedure_corpus(corpus, bdd: sqlite3.Connection, cursor: sqlite3.Cursor, seuil: int = 10000,
-                     debug: bool = False) -> None:
+def procedure_corpus_parallel(corpus: list, bdd, bdd_cursor: sqlite3.Cursor, seuil: int=100, debug: bool=False) -> None:
     i = 0
-    data = set()
-    classes = set()
-    features = set()
-    sequences = set()
-
-    for (j, (classe, sequence)) in enumerate(corpus, start=1):
-        if debug:
-            print("procedure: ", i, j, len(corpus)-j, classe, sequence, file=stderr)
-        with Pool(10) as proc:
-            args = map(lambda x: (sequence, x, Variable('.'), Variable('.+'), True), combinations(len(sequence)))
-            for regex in proc.starmap(powerset_tostring, list(args)):
-                alpha(
-                    i=i,
-                    j=j,
-                    classe=classe,
-                    regex=regex,
-                    sequence=sequence,
-                    seuil=seuil,
-                    sequences=sequences,
-                    classes=classes,
-                    features=features,
-                    data=data,
-                    bdd=bdd,
-                    cursor=cursor,
-                    debug=True
-                )
-                if i == seuil:
-                    i = 0
+    add_value_cmd = '''INSERT OR IGNORE INTO Examples(corpus_id,class_id,feature_id)
+        SELECT Corpus.id,Classes.id,Features.id
+        FROM Corpus,Classes,Features
+        WHERE Corpus.sequence=? AND
+        Classes.classe=? AND
+        Features.feature=?;'''
+    add_classes_cmd = 'INSERT OR IGNORE INTO Classes(classe) VALUES (?);'
+    add_features_cmd = 'INSERT OR IGNORE INTO Features(feature) VALUES (?);'
+    add_sequences_cmd = 'INSERT OR IGNORE INTO Corpus(sequence) VALUES (?);'
+    # bdd_cursor.execute("BEGIN TRANSACTION;")
+    with Pool(5) as proc:
+        for (j, (classes, sequence)) in corpus:
+            if debug:
+                print("procedure: ", len(corpus) - j, i, sequence, file=stderr)
+            if len(sequence) == 1:
+                [bdd_cursor.execute(add_classes_cmd, (x,)) for x in classes]
+                bdd_cursor.execute(add_features_cmd, (sequence,))
+                bdd_cursor.execute(add_sequences_cmd, (sequence,))
+                [bdd_cursor.execute(add_value_cmd, x) for x in map(lambda x: (sequence, x, sequence), classes)]
                 i += 1
-    maj(sequences, classes, features, data, cursor, debug=True)
-    bdd.commit()
+            else:
+                args = map(lambda x: (sequence, x, Variable('.'), Variable('..*'), True), combinations(len(sequence)))
+                for regex in proc.imap_unordered(powerset_tostring, args):
+                    alpha(
+                        i=i,
+                        j=j,
+                        classes=classes,
+                        regex=regex,
+                        sequence=sequence,
+                        seuil=seuil,
+                        bdd=bdd,
+                        bdd_cursor=bdd_cursor,
+                        debug=False
+                    )
+                    if i == seuil:
+                        i = 0
+                    i += 1
 
 
 def procedure_corpus2(corpus, cursor: sqlite3.Cursor, debug: bool=False):
@@ -653,19 +741,19 @@ def create_tables(cursor):
     foreign key (feature_id) REFERENCES Features(id),
     foreign key (corpus_id) REFERENCES Corpus(id),
     unique (corpus_id,class_id,feature_id) ON CONFLICT IGNORE
-)"""
+) TABLESPACE Perceptron"""
     classes = """CREATE TABLE IF NOT EXISTS Classes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     classe TEXT UNIQUE
-)"""
+) TABLESPACE Perceptron"""
     features = """CREATE TABLE IF NOT EXISTS Features (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     feature TEXT UNIQUE
-)"""
+) TABLESPACE Perceptron"""
     corpus = """CREATE TABLE IF NOT EXISTS Corpus (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sequence STRING UNIQUE
-)"""
+) TABLESPACE Perceptron"""
     genealogie = """CREATE TABLE IF NOT EXISTS Genealogie (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     pere_id INTEGER NOT NULL,
@@ -673,7 +761,7 @@ def create_tables(cursor):
     FOREIGN KEY (pere_id) REFERENCES Features(id),
     FOREIGN KEY (descendant_id) REFERENCES Featues(id),
     UNIQUE (pere_id,descendant_id) ON CONFLICT IGNORE
-)"""
+) TABLESPACE Perceptron"""
     cursor.executescript(";\n".join([examples, classes, features, corpus, genealogie]) + ";")
 
 
@@ -810,14 +898,15 @@ def main2():
 
 
 def main3():
-    perceptron_bdd = 'Perceptron.db'
+    perceptron_bdd = '/Volumes/RESEARCH/Research/Perceptron.db'
     lexicon_bdd = 'Lexique.db'
-    lexicon = sqlite3.connect(database=lexicon_bdd)
-    lexicon_cursor = lexicon.cursor()
+    with sqlite3.connect(database=lexicon_bdd) as lexicon:
+        lexicon_cursor = lexicon.cursor()
 
     lexicon_cursor.execute("SELECT distinct cgramortho,ortho FROM Lexique order by length(ortho) asc")
 
-    corpus = list(takewhile(cursor=lexicon_cursor))
+    corpus = list(takewhile(cursor=lexicon_cursor))[105104:]
+
     # print(corpus)
     # for j, regex in enumerate(procedure_corpus2(corpus=corpus, debug=True)):
     #     print(j, regex)
@@ -825,25 +914,19 @@ def main3():
     #         if re.search(regex, sequence):
     #             dico[regex].add(sequence)
     # print(*["\t".join((x, ",".join(y))) for (x,y) in dico.items() if len(y)>1], sep='\n', file=open('temporaire1.txt', 'w', 'utf-8'))
-    bdd = sqlite3.connect(perceptron_bdd, timeout=10)
-    bdd_cursor = bdd.cursor()
-
-    # bdd_cursor.execute('pragma main.pagesize=4096')
-    # bdd_cursor.execute('pragma main.cache_size=-1000000')
-    # bdd_cursor.execute('pragma main.locking_mode=EXCLUSIVE')
-    # bdd_cursor.execute('pragma main.synchronous=NORMAL')
-    # bdd_cursor.execute('pragma main.journal_mode=WAL')
-    # bdd_cursor.execute('pragma main.cache_size=1000000')
-    create_tables(cursor=bdd_cursor)
-    # sequences = list(map(lambda x: x[1], corpus))
-    # bdd_cursor.execute('SELECT DISTINCT example_id FROM Examples order by example_id asc')
-    # print(bdd_cursor.fetchone())
-    # tfidf_queue = Queue()
-    procedure_corpus2(corpus=corpus, cursor=bdd_cursor, debug=True)
-    bdd.commit()
-    # tfidf_process = Process(target=procedure_tfidf, args=(tfidf_queue, bdd, bdd_cursor, sequences, True))
-    # tfidf_process.start()
-    # tfidf_process.join()
+    with psycopg2.connect(perceptron_bdd, timeout=10) as bdd:
+        bdd_cursor = bdd.cursor()
+        # bdd_cursor.execute("PRAGMA main.synchronous=OFF")
+        # bdd_cursor.execute("PRAGMA main.journal_mode=TRUNCATE")
+        # bdd_cursor.execute("PRAGMA main.locking_mode=EXCLUSIVE")
+        create_tables(cursor=bdd_cursor)
+        procedure_corpus_parallel(
+            corpus=corpus,
+            bdd_cursor=bdd_cursor,
+            seuil=100000,
+            bdd=bdd,
+            debug=True
+        )
 
 
 def takewhile(func=lambda x: (x[0].split(','), x[1]), cursor: sqlite3.Cursor=None):
