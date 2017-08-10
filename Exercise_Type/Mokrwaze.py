@@ -3,17 +3,48 @@ import operator
 from copy import deepcopy
 import re
 import numpy
-from collections import defaultdict
+from collections import defaultdict, deque
 import itertools
-from multiprocessing import Process, Queue, Pool
-from sqlite3 import Cursor, connect
+from multiprocessing import Process, SimpleQueue, Pool, Queue, Pipe
+import sqlite3
 import sys
+import dill
+import chest
+dill.settings['byref'] = True
+dill.settings['recurse'] = False
 import typing
+from os.path import exists
 
 
 class InfiniteDict(defaultdict):
     def __init__(self):
         super(InfiniteDict, self).__init__(self.__class__)
+
+
+def skip_duplicates(iterable, key=lambda x: x):
+    """
+        http://sametmax.com/saffranchir-des-doublons-dun-iterable-en-python/
+    :param iterable:
+    :param key:
+    :return:
+    """
+    # on va mettre l’empreinte unique de chaque élément dans ce set
+    fingerprints = set()
+
+    for x in iterable:
+        # chaque élement voit son emprunte calculée. Par défaut l’empreinte
+        # est l'élément lui même, ce qui fait qu'il n'y a pas besoin de
+        # spécifier 'key' pour des primitives comme les ints ou les strings.
+        fingerprint = key(x)
+
+        # On vérifie que l'empreinte est dans la liste des empreintes  des
+        # éléments précédents. Si ce n'est pas le cas, on yield l'élément, et on
+        # rajoute sont empreinte ans la liste de ceux trouvés, donc il ne sera
+        # pas yieldé si on ne le yieldera pas une seconde fois si on le
+        # rencontre à nouveau
+        if fingerprint not in fingerprints:
+            yield x
+            fingerprints.add(fingerprint)
 
 
 def liste_resultats(sequence):
@@ -22,6 +53,7 @@ def liste_resultats(sequence):
 
 def neutralise(chaine):
     symbs = {
+        '1': 'ê',
         '2': '2',
         '5': 'ê',
         '8': 'y',
@@ -381,7 +413,7 @@ def ff(bdd, i):
             print(elem)
 
 
-def procedure_grille(length: int, inds: tuple, industrie: defaultdict, bdd: Cursor):
+def procedure_grille(length: int, inds: tuple, industrie: defaultdict, bdd: sqlite3.Cursor):
     i = 0
     while True:
         if inds == (0, 0):
@@ -432,6 +464,16 @@ def initialise_memoire(i: int, k: int, sequences: list):
     return struc
 
 
+def all_equal(iterable):
+    t = None
+    for x in iterable:
+        if t is None:
+            t = x
+        if t != x:
+            return False
+    return True
+
+
 class Zone(object):
     def __init__(self, outputs, func=lambda x, y: (x,y)):
         self.envoi = Queue()
@@ -475,10 +517,10 @@ class Zone(object):
 
 
 class Grid(object):
-    def __init__(self, shape, itemsize=1, unicode=False, buffer=None, offset=0,
-                 strides=None, order='C', jonction=(), symmetric=False):
+    def __init__(self, shape, values: tuple=(), itemsize=1, unicode=True, buffer=None, offset=0,
+                 strides=None, order='C', jonction=(), symmetric=False, look_back: tuple=None, look_ahead: tuple=None):
         self.grille = numpy.chararray(
-            shape,
+            shape=shape,
             itemsize=itemsize,
             unicode=unicode,
             buffer=buffer,
@@ -486,45 +528,58 @@ class Grid(object):
             strides=strides,
             order=order
         )
+        self.grille[jonction[0]] = list(values[0])
+        self.grille[:, jonction[1]] = list(values[1])
+
         self.jonction = jonction
+        self.look_ahead = look_ahead
+        self.look_back = look_back
         self.symmetric = symmetric
 
     def __repr__(self): return str(self.grille)
 
     def __str__(self): return repr(self)
 
-    def is_symmetric(self):
-        return (self.grille[self.jonction[0]] == self.grille[:, self.jonction[1]]).all()
-
-    def naive_add(self, other) -> typing.Union[numpy.chararray, None]:
-        g3 = numpy.chararray(shape=self.grille.shape)
-        for i in self.grille:
-            for j in self.grille:
-                if self.grille[i, j] == other.grille[i, j]:
-                    g3[i][j] = self.grille[i][j]
-                elif (self.grille[i][j] + other.grille[i][j]) == (self.grille[i][j] or other.grille[i][j]):
-                    g3[i][j] = (self.grille[i][j] or other.grille[i][j])
+    def __add__(self, other):
+        if self.look_ahead == other.look_back:
+            print('ici')
+            g3 = self.grille.copy()
+            (l, c) = other.jonction
+            for i in range(self.grille.shape[0]):
+                if self.grille[l, i] == other.grille[l, i]:
+                    pass
+                elif (self.grille[l, i] + other.grille[l, i]) == (self.grille[l, i] or other.grille[l, i]):
+                    g3[l, i] = (self.grille[l, i] or other.grille[l, i])
                 else:
                     return None
-        return g3
+                if self.grille[i, c] == other.grille[i, c]:
+                    g3[i, c] = self.grille[i, c]
+                elif (self.grille[i, c] + other.grille[i, c]) == (self.grille[i, c] or other.grille[i, c]):
+                    g3[i, c] = (self.grille[i, c] or other.grille[i, c])
+                else:
+                    return None
+            tmp = Grid(
+                shape=self.grille.shape,
+                values=("".join(self.grille[self.jonction[0]]), "".join(self.grille[:, self.jonction[1]])),
+                jonction=other.jonction
+            )
+            tmp.look_back = other.look_back
+            tmp.look_ahead = other.look_ahead
+            tmp.grille = g3.copy()
+            tmp.symmetric = self.symmetric and other.symmetric
+            return tmp
+        else:
+            print('là')
+            return None
 
-    def add_optimise(self, other):
-        """
-            le i passé en paramètre permet de restreindre drastiquement le nombre de comparaison.
-            Si i > 0 alors on comparé (g1[], g1[])
-        :param g1:
-        :param g2:
-        :param i:
-        :return:
-        """
-        g3 = self.grille.copy()
-        (x, y) = other.jonction
-        verif = ((x-1, x), (y, y-1))
-        if (self.grille[verif[0]] == other.grille[verif[0]]) and (self.grille[verif[1]] == other.grille[verif[1]]):
-            for i in range(x, g3.shape[0]):
-                for j in range(y, g3.shape[0]):
-                    g3[i, j] = other.grille[i, j]
+    def __len__(self):
+        return 1
 
+    def __hash__(self):
+        return 1
+
+    def __eq__(self, other):
+        return (self.grille == other.grille).all()
 
 
 def genere_structure(corpus: list, n: int, i: int):
@@ -547,6 +602,146 @@ def genere_structure(corpus: list, n: int, i: int):
     for k, g in itertools.groupby(corpus, lambda x: x[i]):
         dd.extend(g)
     return i, ((i+1, i), (i, i+1)) if i < n else None, itertools.starmap(f, map(lambda x: x + (i,), itertools.product(dd, repeat=2)))
+
+
+class Consumer(Process):
+    consumers = dict()
+
+    def __init__(self, data: list, i: int, n: int, args=()):
+        super(Consumer, self).__init__(args=args)
+        self.reception = args[0] if len(args) == 1 else None
+        self.memory = data
+        self.n = n
+        self.i = i
+        self.consumers[i] = self
+
+    def run(self):
+        while True:
+            next_task = self.reception.get()
+            if next_task is None:
+                print('Tasks Done', file=sys.stderr)
+                break
+            next_task(memoire=self.memory, cible=self.consumers[self.i + 1], n=self.n)
+
+
+class Task(object):
+    stmnts = list()
+
+    def __init__(self, grille: Grid, seuil, db):
+        self.seuil = seuil
+        self.grille = grille
+        self.db = db
+
+    def __call__(self, memoire: list, cible: Consumer, n: int, *args, **kwargs):
+        """
+            On boucle sur un ensemble de grille représentant les grilles disponible à la ième position
+            avec la grille à i-1, on fait "l'addition" des deux, si l'addition marche,
+
+        :param grille:
+        :param i:
+        :param args:
+        :param kwargs:
+        :return:
+        """
+        cmd = "sqlite3 Mokrwaze.db < {sql_script}"
+        englobe = "BEGIN TRANSACTION;\n{sql_cmds}\nCOMMIT TRANSACTION;\n"
+        insert_stmnt = """INSERT OR IGNORE INTO Mokrwaze(n, grille_id, ligne_id)
+        SELECT {n},{g_id},id
+        FROM Features
+        WHERE feature=?
+        """
+        g_id = 1
+        for j, g in enumerate(memoire, start=1):
+            calcul = self.grille + g
+            if calcul is not None:
+                if i == n - 1:
+                    if len(self.stmnts) == self.seuil:
+                        print('maj')
+                        with connect(self.db) as tmp:
+                            tmp.executescript(englobe.format(sql_cmds=";\n".join(self.stmnts)))
+                            self.stmnts.clear()
+                    self.stmnts.append(insert_stmnt.format(n=n, g_id=g_id))
+                    g_id += 1
+                cible.reception.put(Task(grille=calcul, seuil=self.seuil, db=self.db))
+        cible.reception.put(None)
+
+
+def genere_grille(n: int, corpus: list):
+    corpus = list(filter(lambda x: len(x) == n, corpus))
+    print(len(corpus))
+    # Création des processus
+    tasks = SimpleQueue()
+    consumers = list()
+    for i in range(1, n):
+        data = list(itertools.chain(*[[Grid(shape=(n, n), values=z, jonction=(i, i)) for z in itertools.combinations(v, r=2)] for _, v in itertools.groupby(key=lambda x: x[i], iterable=corpus)]))
+        consumers.append(
+            Consumer(
+                task_queue=SimpleQueue(),
+                data=data,
+                i=i,
+                n=n
+            )
+        )
+
+    # Remplissage du premier processus
+    for x in itertools.chain(*[[z for z in itertools.combinations(v, r=2)] for _, v in itertools.groupby(corpus, lambda x: x[0])]):
+        consumers[0].reception.put(x)
+        print(x)
+        # Task(Grid(shape=(n, n), values=x, jonction=(0, 0)), seuil=1000, db="Mokrwaze.db")
+    # Consumer.consumers[1].reception.put(None)
+    print('done')
+
+    #     Consumer.consumers[i].join()
+
+
+def add1(queue_in: Queue, queue_out: Queue, memoire: dict):
+    while True:
+        x = queue_in.get()
+        if x is None:
+            print('Tasks Done!', file=sys.stderr)
+            break
+        if x.jonction == (2, 2):
+            print(memoire.get(x.look_ahead))
+        for y in memoire.get(x.look_ahead, ()):
+            calcul = x + y
+            if calcul is not None:
+                queue_out.put(calcul)
+
+
+def add2(queue_in: deque, queue_out: deque, memoire: dict):
+    while queue_in:
+        x = queue_in.pop()
+        for y in memoire.get(x.look_ahead, ()):
+            # print(x.look_ahead == y.look_back)
+            calcul = x + y
+            if calcul is not None:
+                queue_out.appendleft(calcul)
+
+
+def sauvegarde(queue, curseur):
+    cmd = """
+    CREATE TABLE IF NOT EXISTS Mokrwaze(
+        id INTEGER PRIMARY KEY,
+        length INTEGER,
+        lexique_id TEXT,
+        symetrie INTEGER
+    );
+    """
+    insert = """INSERT OR IGNORE INTO Mokrwaze(length,ligne,symetrie)
+    SELECT length(Formes.forme),Formes.id,?
+    FROM Formes
+    WHERE Formes.forme=?
+    """
+    curseur.execute(cmd)
+    print('je suis là')
+    while True:
+        grille = queue.get()
+        if grille is None:
+            print('Tasks done!')
+            break
+        lignes = ["".join(grille.grille[i]) for i in range(grille.grille.shape[0])]
+        sym = 1 if grille.is_symmetric() else 0
+        curseur.execute(insert, map(lambda x: (x, sym), lignes))
 
 
 def main():
@@ -634,23 +829,129 @@ def main2():
 
 def main3():
     n = 3
-    with connect('Lexique.db') as corpus:
-        corpus_curs = corpus.cursor()
-    lexique = list(itertools.chain(*corpus_curs.execute('select distinct ortho from lexique where length(ortho)=?', (n,)).fetchall()))
-    tmp = genere_structure(lexique, n, 1)
-    print(tmp, next(tmp[-1]))
-    print(tmp, next(tmp[-1]))
-    # task_queue = Queue()
 
-    # for x in tmp:
-    #     task_queue.put(x)
+    lexique = sqlite3.connect("Lexique.db")
+    lexique.create_function('neutr', 1, neutralise)
+    lex_curs = lexique.cursor()
+    lex_curs.execute("ATTACH DATABASE 'Mokrwaze.db' AS 'mokrwaze'")
+    corpus_ortho = list(itertools.chain(*lex_curs.execute(
+        "select distinct ortho from lexique where length(ortho)=?", (n,)
+    )))
+    # print(len(corpus_ortho), file=sys.stderr)
+    # print(set("".join(corpus_ortho)), file=sys.stderr)
+    corpus_phono = list(itertools.chain(*lex_curs.execute(
+        "select distinct neutr(phon) from lexique where length(phon)=?", (n,)
+    )))
+    # print(len(corpus_phono), file=sys.stderr)
+    # print(set("".join(corpus_phono)), file=sys.stderr)
+    if exists('lex.pickle'):
+        memoire = chest.Chest(path='lex.pickle')
+    else:
+        memoire = chest.Chest(path='lex.pickle')
+        sym = False
+        look_back = None
+        look_ahead = None
+        for i in range(n):
+            print(i, sys.stderr)
+            memoire[i] = dict()
+            for _, v in itertools.groupby(iterable=corpus_phono, key=lambda p: p[i]):
+                h = list(v)
+                for x, y in itertools.product(h, repeat=2):
+                    if x == y:
+                        sym = True
+                    if not i:
+                        look_ahead = x[i + 1], y[i + 1]
+                    elif i == n-1:
+                        look_back = x[i - 1], y[i - 1]
+                    else:
+                        look_back = x[i - 1], y[i - 1]
+                        look_ahead = x[i + 1], y[i + 1]
+                    if (look_ahead is not None) and (look_ahead in memoire[i]):
+                        grille = Grid(
+                                shape=(n, n),
+                                values=(x, y),
+                                jonction=(i, i),
+                                symmetric=sym,
+                                look_ahead=look_ahead,
+                                look_back=look_back
+                            )
+                    else:
+                        memoire[i][look_ahead] = set()
+                    if grille not in memoire[i][look_ahead]:
+                        memoire[i][look_ahead].add(
+                            grille
+                        )
 
+    # dill.dump(memoires, open('lex.pickle', 'wb'))
+    print('memoire is done')
+    # print(list(itertools.chain(*memoire.get(2).values())))
+    queues = [deque() for _ in range(n)]
+    [queues[0].appendleft(x) for x in itertools.chain(*memoire.get(0).values())]
+    for i in range(1, n):
+        print(i, file=sys.stderr)
+        add2(
+            queue_in=queues[i - 1],
+            queue_out=queues[i],
+            memoire=memoire.get(i)
+        )
+        # print()
+        # print(queues[i] != [])
+        # print(queues[i])
+    print('done')
+    while queues[-1]:
+        print(queues[-1].pop())
+        print()
+    print('end')
+    # [queues[0].put(x) for x in itertools.chain(*memoires.get(0).values())]
+    # queues[0].put(None)
+    # processes = list()
+    # processes.append(None)
+    # for i in range(1, n):
+    #     p = Process(target=add, args=(queues[i - 1], queues[i], memoires.get(i)))
+    #     processes.append(p)
+    #     p.start()
+    # q = Process(target=sauvegarde, args=(queues[-1], lex_curs))
+    #
+    # for p in processes[1:]:
+    #     p.join()
+    # q.join()
 
-def worker(input, output):
-    for func, args in iter(input.get, 'STOP'):
-        result = calculate(func, args)
-        output.put(result)
-
+def main4():
+    x = 'api'
+    y = 'apo'
+    z = 'pul'
+    t = 'pur'
+    a = 'ila'
+    p = 'ora'
+    xx = Grid(
+        shape=(3, 3),
+        values=(x, y),
+        jonction=(0, 0),
+        symmetric=False,
+        look_ahead=('p', 'p'),
+        look_back=None
+    )
+    yy = Grid(
+        shape=(3, 3),
+        values=(z, t),
+        jonction=(1, 1),
+        symmetric=False,
+        look_ahead=('l', 'r'),
+        look_back=('p', 'p')
+    )
+    zz = Grid(
+        shape=(3, 3),
+        values=(p, a),
+        jonction=(2, 2),
+        symmetric=False,
+        look_ahead=None,
+        look_back=('l', 'r')
+    )
+    print(zz)
+    print()
+    tmp = xx + yy
+    print(tmp.__dict__)
+    print(tmp + zz)
 
 if __name__ == '__main__':
     main3()
