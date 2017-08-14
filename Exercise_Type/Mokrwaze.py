@@ -697,11 +697,11 @@ def genere_grille(n: int, corpus: list):
 def add1(queue_in: Queue, queue_out: Queue, memoire: dict):
     while True:
         x = queue_in.get()
+        print(x)
         if x is None:
             print('Tasks Done!', file=sys.stderr)
+            queue_out.put(x)
             break
-        if x.jonction == (2, 2):
-            print(memoire.get(x.look_ahead))
         for y in memoire.get(x.look_ahead, ()):
             calcul = x + y
             if calcul is not None:
@@ -742,6 +742,54 @@ def sauvegarde(queue, curseur):
         lignes = ["".join(grille.grille[i]) for i in range(grille.grille.shape[0])]
         sym = 1 if grille.is_symmetric() else 0
         curseur.execute(insert, map(lambda x: (x, sym), lignes))
+
+
+def genere_memoire(i: int, corpus: list, n: int):
+    sym = False
+    look_back = None
+    look_ahead = None
+    grille = None
+    memoire = dict()
+    for _, v in itertools.groupby(iterable=corpus, key=lambda p: p[i]):
+        h = list(v)
+        for x, y in itertools.product(h, repeat=2):
+            if x == y:
+                sym = True
+            if not i:
+                look_ahead = x[i + 1], y[i + 1]
+            elif i == n - 1:
+                look_back = x[i - 1], y[i - 1]
+            else:
+                look_back = x[i - 1], y[i - 1]
+                look_ahead = x[i + 1], y[i + 1]
+            if (look_ahead is not None) and (look_ahead in memoire):
+                grille = Grid(
+                    shape=(n, n),
+                    values=(x, y),
+                    jonction=(i, i),
+                    symmetric=sym,
+                    look_ahead=look_ahead,
+                    look_back=look_back
+                )
+                if grille not in memoire.get(look_ahead):
+                    memoire[look_ahead].add(
+                        grille
+                    )
+                else:
+                    memoire[look_ahead] = set()
+    return iter(memoire.items())
+
+
+
+def genere_grilles_2(n, corpus):
+    # corpus = list(filter(lambda x: x[n], corpus))
+    queues = list(map(lambda x: Queue(), range(n)))
+    processes = list(map(lambda x: Process(target=add1, args=(queues[x-1], queues[x], dict(genere_memoire(x, corpus, n)))), range(1, n)))
+    [queues[0].put(x) for x in genere_memoire(i=0, corpus=list(corpus), n=n)]
+    for w in processes:
+        w.start()
+        w.join()
+    print(queues[-1].empty())
 
 
 def main():
@@ -829,7 +877,6 @@ def main2():
 
 def main3():
     n = 3
-
     lexique = sqlite3.connect("Lexique.db")
     lexique.create_function('neutr', 1, neutralise)
     lex_curs = lexique.cursor()
@@ -837,50 +884,19 @@ def main3():
     corpus_ortho = list(itertools.chain(*lex_curs.execute(
         "select distinct ortho from lexique where length(ortho)=?", (n,)
     )))
-    # print(len(corpus_ortho), file=sys.stderr)
-    # print(set("".join(corpus_ortho)), file=sys.stderr)
+
     corpus_phono = list(itertools.chain(*lex_curs.execute(
         "select distinct neutr(phon) from lexique where length(phon)=?", (n,)
     )))
-    # print(len(corpus_phono), file=sys.stderr)
-    # print(set("".join(corpus_phono)), file=sys.stderr)
-    if exists('lex.pickle'):
-        memoire = chest.Chest(path='lex.pickle')
-    else:
-        memoire = chest.Chest(path='lex.pickle')
-        sym = False
-        look_back = None
-        look_ahead = None
-        for i in range(n):
-            print(i, sys.stderr)
-            memoire[i] = dict()
-            for _, v in itertools.groupby(iterable=corpus_phono, key=lambda p: p[i]):
-                h = list(v)
-                for x, y in itertools.product(h, repeat=2):
-                    if x == y:
-                        sym = True
-                    if not i:
-                        look_ahead = x[i + 1], y[i + 1]
-                    elif i == n-1:
-                        look_back = x[i - 1], y[i - 1]
-                    else:
-                        look_back = x[i - 1], y[i - 1]
-                        look_ahead = x[i + 1], y[i + 1]
-                    if (look_ahead is not None) and (look_ahead in memoire[i]):
-                        grille = Grid(
-                                shape=(n, n),
-                                values=(x, y),
-                                jonction=(i, i),
-                                symmetric=sym,
-                                look_ahead=look_ahead,
-                                look_back=look_back
-                            )
-                    else:
-                        memoire[i][look_ahead] = set()
-                    if grille not in memoire[i][look_ahead]:
-                        memoire[i][look_ahead].add(
-                            grille
-                        )
+
+    # def f(x, y, sym, look_ahead: tuple=None, look_back: tuple=None):
+
+
+    memoire = chest.Chest(path='lex.pickle')
+    sym = False
+    look_ahead = None
+    look_back = None
+    f = lambda memoire: [[[f(x, y, sym, look_ahead, look_back, memoire) for x, y in itertools.product(list(v), repeat=2)] for _, v in itertools.groupby(iterable=corpus_phono, key=lambda p: p[i])] for x in range(n)]
 
     # dill.dump(memoires, open('lex.pickle', 'wb'))
     print('memoire is done')
@@ -889,6 +905,37 @@ def main3():
     [queues[0].appendleft(x) for x in itertools.chain(*memoire.get(0).values())]
     for i in range(1, n):
         print(i, file=sys.stderr)
+        memoire = chest.Chest(path='lex.pickle')
+        sym = False
+        look_back = None
+        look_ahead = None
+        for _, v in itertools.groupby(iterable=corpus_phono, key=lambda p: p[i]):
+            h = list(v)
+            for x, y in itertools.product(h, repeat=2):
+                if x == y:
+                    sym = True
+                if not i:
+                    look_ahead = x[i + 1], y[i + 1]
+                elif i == n - 1:
+                    look_back = x[i - 1], y[i - 1]
+                else:
+                    look_back = x[i - 1], y[i - 1]
+                    look_ahead = x[i + 1], y[i + 1]
+                if (look_ahead is not None) and (look_ahead in memoire[i]):
+                    grille = Grid(
+                        shape=(n, n),
+                        values=(x, y),
+                        jonction=(i, i),
+                        symmetric=sym,
+                        look_ahead=look_ahead,
+                        look_back=look_back
+                    )
+                    if grille not in memoire[i][look_ahead]:
+                        memoire[i][look_ahead].add(
+                            grille
+                        )
+                    else:
+                        memoire[i][look_ahead] = set()
         add2(
             queue_in=queues[i - 1],
             queue_out=queues[i],
@@ -916,42 +963,18 @@ def main3():
     #     p.join()
     # q.join()
 
+
 def main4():
-    x = 'api'
-    y = 'apo'
-    z = 'pul'
-    t = 'pur'
-    a = 'ila'
-    p = 'ora'
-    xx = Grid(
-        shape=(3, 3),
-        values=(x, y),
-        jonction=(0, 0),
-        symmetric=False,
-        look_ahead=('p', 'p'),
-        look_back=None
-    )
-    yy = Grid(
-        shape=(3, 3),
-        values=(z, t),
-        jonction=(1, 1),
-        symmetric=False,
-        look_ahead=('l', 'r'),
-        look_back=('p', 'p')
-    )
-    zz = Grid(
-        shape=(3, 3),
-        values=(p, a),
-        jonction=(2, 2),
-        symmetric=False,
-        look_ahead=None,
-        look_back=('l', 'r')
-    )
-    print(zz)
-    print()
-    tmp = xx + yy
-    print(tmp.__dict__)
-    print(tmp + zz)
+    n = 3
+    lexique = sqlite3.connect("Lexique.db")
+    lexique.create_function('neutr', 1, neutralise)
+    lex_curs = lexique.cursor()
+    lex_curs.execute("ATTACH DATABASE 'Mokrwaze.db' AS 'mokrwaze'")
+    corpus_ortho = list(itertools.chain(*lex_curs.execute(
+        "select distinct ortho from lexique where length(ortho)=?", (n,)
+    )))
+    genere_grilles_2(n=n, corpus=corpus_ortho)
+
 
 if __name__ == '__main__':
-    main3()
+    main4()
