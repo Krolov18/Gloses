@@ -82,7 +82,8 @@ def main():
     print(powerset(args.chaine, args.positions.split(','), Variable('.'), Variable('.+'), True), file=sys.stdout)
 
 
-def powerset_tostring(seq, ks, var_u, var_e, extend):
+def powerset_tostring(*args):
+    (seq, ks, var_u, var_e, extend) = args[0]
     return "".join(map(str, powerset(seq=seq, ks=ks, var_u=var_u, var_e=var_e, extend=extend)))
 
 

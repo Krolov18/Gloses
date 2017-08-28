@@ -325,7 +325,8 @@ def g(curseur, column: str, taille: int):
                 sequence=curseur.fetchall()
             )
         )
-    begins = filter(lambda elem: all(x in struc.get(2) for x in transpose(elem)), itertools.combinations(struc.get(2), r=2))
+    begins = filter(lambda elem: all(x in struc.get(2) for x in transpose(elem)),
+                    itertools.combinations(struc.get(2), r=2))
     for l0 in struc.get(2):
         # pour la lihgne qui suit: (l0 <= elem) permet de réduire la liste mais que fait de réduire cette liste ?
         for c0 in filter(lambda elem: (elem[0] == l0[0]) and (l0 <= elem), struc.get(2)):
@@ -780,11 +781,12 @@ def genere_memoire(i: int, corpus: list, n: int):
     return iter(memoire.items())
 
 
-
 def genere_grilles_2(n, corpus):
     # corpus = list(filter(lambda x: x[n], corpus))
     queues = list(map(lambda x: Queue(), range(n)))
-    processes = list(map(lambda x: Process(target=add1, args=(queues[x-1], queues[x], dict(genere_memoire(x, corpus, n)))), range(1, n)))
+    processes = list(
+        map(lambda x: Process(target=add1, args=(queues[x - 1], queues[x], dict(genere_memoire(x, corpus, n)))),
+            range(1, n)))
     [queues[0].put(x) for x in genere_memoire(i=0, corpus=list(corpus), n=n)]
     for w in processes:
         w.start()

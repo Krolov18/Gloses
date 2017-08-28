@@ -16,7 +16,8 @@ import functools
 # from codecs import open
 import psycopg2
 # from psycopg2 import sql
-# from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+from codecs import open
+from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
 
 class Point(object):
@@ -630,53 +631,71 @@ def func(new: OptimString, fifo: deque, curseur: sqlite3.Cursor, classes, old: O
         return False
 
 
-def alpha(i: int, j: int, classes, regex: str, sequence: str, seuil: int, bdd, bdd_cursor: sqlite3.Cursor, debug: bool=False):
+def alpha(i: int, j: int, classes, regex: str, sequence: str, seuil: int, bdd, bdd_cursor, statements, debug: bool=False):
     add_value_cmd = '''INSERT INTO Examples(corpus_id,class_id,feature_id)
-    SELECT Corpus.id,Classes.id,Features.id
-    FROM Corpus,Classes,Features
-    WHERE Corpus.sequence=? AND
-    Classes.classe=? AND
-    Features.feature=?;'''
-    add_classes_cmd = 'INSERT OR IGNORE INTO Classes(classe) VALUES (?);'
-    add_features_cmd = 'INSERT OR IGNORE INTO Features(feature) VALUES (?);'
-    add_sequences_cmd = 'INSERT OR IGNORE INTO Corpus(sequence) VALUES (?);'
+            SELECT d.id,Classes.id,Features.id
+            FROM Features as d,Classes,Features
+            WHERE d.feature=%s AND
+            Classes.classe=%s AND
+            Features.feature=%s ON CONFLICT DO NOTHING;'''
+    add_value_cmd_bis = '''INSERT INTO Examples(corpus_id,class_id,feature_id)
+                SELECT d.id,Classes.id,Features.id
+                FROM Features as d,Classes,Features
+                WHERE d.feature='%s' AND
+                Classes.classe='%s' AND
+                Features.feature='%s' ON CONFLICT DO NOTHING;'''
+    add_classes_cmd = 'INSERT INTO Classes(classe) VALUES (%s) ON CONFLICT DO NOTHING;'
+    add_classes_cmd_bis = 'INSERT INTO Classes(classe) VALUES (\'%s\') ON CONFLICT DO NOTHING;'
+    add_features_cmd = 'INSERT INTO Features(feature) VALUES (\'%s\') ON CONFLICT DO NOTHING;'
+    add_features_cmd_bis = 'INSERT INTO Features(feature) VALUES (\'%s\') ON CONFLICT DO NOTHING;'
 
-    if debug:
-        print("alpha: ", j, i, classes, regex, file=stderr)
     if i == seuil:
-        bdd.commit()
-        # bdd_cursor.execute('BEGIN TRANSACTION;')
-    [bdd_cursor.execute(add_classes_cmd, (x,)) for x in classes]
-    bdd_cursor.execute(add_features_cmd, (regex,))
-    bdd_cursor.execute(add_sequences_cmd, (sequence,))
-    [bdd_cursor.execute(add_value_cmd, x) for x in map(lambda x: (sequence, x, regex), classes)]
+        statements.append("COMMIT;")
+        bdd_cursor.execute("\n".join(statements))
+        statements.clear()
+        if debug:
+            print("alpha: ", j, i, classes, regex, file=stderr)
+        statements.append("BEGIN;")
+    [statements.append(add_classes_cmd_bis % (x,)) for x in classes]
+    statements.append(add_features_cmd_bis % (regex,))
+    [statements.append(add_value_cmd_bis % x) for x in map(lambda x: (sequence, x, regex), classes)]
 
 
 def procedure_corpus_parallel(corpus: list, bdd, bdd_cursor: sqlite3.Cursor, seuil: int=100, debug: bool=False) -> None:
     i = 0
-    add_value_cmd = '''INSERT OR IGNORE INTO Examples(corpus_id,class_id,feature_id)
-        SELECT Corpus.id,Classes.id,Features.id
-        FROM Corpus,Classes,Features
-        WHERE Corpus.sequence=? AND
-        Classes.classe=? AND
-        Features.feature=?;'''
-    add_classes_cmd = 'INSERT OR IGNORE INTO Classes(classe) VALUES (?);'
-    add_features_cmd = 'INSERT OR IGNORE INTO Features(feature) VALUES (?);'
-    add_sequences_cmd = 'INSERT OR IGNORE INTO Corpus(sequence) VALUES (?);'
+    statements = list()
+    add_value_cmd = '''INSERT INTO Examples(corpus_id,class_id,feature_id)
+        SELECT d.id,Classes.id,Features.id
+        FROM Features as d,Classes,Features
+        WHERE d.feature=%s AND
+        Classes.classe=%s AND
+        Features.feature=%s ON CONFLICT DO NOTHING;'''
+    add_value_cmd_bis = '''INSERT INTO Examples(corpus_id,class_id,feature_id)
+            SELECT d.id,Classes.id,Features.id
+            FROM Features as d,Classes,Features
+            WHERE d.feature='%s' AND
+            Classes.classe='%s' AND
+            Features.feature='%s' ON CONFLICT DO NOTHING;'''
+    add_classes_cmd = 'INSERT INTO Classes(classe) VALUES (%s) ON CONFLICT DO NOTHING;'
+    add_classes_cmd_bis = 'INSERT INTO Classes(classe) VALUES (\'%s\') ON CONFLICT DO NOTHING;'
+    add_features_cmd = 'INSERT INTO Features(feature) VALUES (\'%s\') ON CONFLICT DO NOTHING;'
+    add_features_cmd_bis = 'INSERT INTO Features(feature) VALUES (\'%s\') ON CONFLICT DO NOTHING;'
     # bdd_cursor.execute("BEGIN TRANSACTION;")
-    with Pool(5) as proc:
+    statements.append("BEGIN;")
+    with Pool(10) as proc:
         for (j, (classes, sequence)) in corpus:
+            sequence = sequence.replace("'", "''")
             if debug:
                 print("procedure: ", len(corpus) - j, i, sequence, file=stderr)
             if len(sequence) == 1:
-                [bdd_cursor.execute(add_classes_cmd, (x,)) for x in classes]
-                bdd_cursor.execute(add_features_cmd, (sequence,))
-                bdd_cursor.execute(add_sequences_cmd, (sequence,))
-                [bdd_cursor.execute(add_value_cmd, x) for x in map(lambda x: (sequence, x, sequence), classes)]
+                [statements.append(add_classes_cmd_bis % (x,)) for x in classes]
+                statements.append(add_features_cmd_bis % (sequence,))
+                [statements.append(add_value_cmd_bis % x) for x in map(lambda x: (sequence, x, sequence), classes)]
                 i += 1
             else:
                 args = map(lambda x: (sequence, x, Variable('.'), Variable('..*'), True), combinations(len(sequence)))
                 for regex in proc.imap_unordered(powerset_tostring, args):
+                    regex = regex.replace("'", "''")
                     alpha(
                         i=i,
                         j=j,
@@ -686,7 +705,8 @@ def procedure_corpus_parallel(corpus: list, bdd, bdd_cursor: sqlite3.Cursor, seu
                         seuil=seuil,
                         bdd=bdd,
                         bdd_cursor=bdd_cursor,
-                        debug=False
+                        statements=statements,
+                        debug=True
                     )
                     if i == seuil:
                         i = 0
@@ -697,12 +717,10 @@ def procedure_corpus2(corpus, cursor: sqlite3.Cursor, debug: bool=False):
     for (j, (classes, sequence)) in corpus:
         if debug:
             print("procedure: ", len(corpus) - j, sequence, file=stderr)
-        add_corpus_cmd = "INSERT OR IGNORE INTO Corpus(sequence) VALUES (?);"
         add_feature_cmd = "INSERT OR IGNORE INTO Features(feature) VALUES (?);"
         add_classes_cmd = "INSERT OR IGNORE INTO Classes(classe) VALUES (?);"
         cursor.execute('BEGIN TRANSACTION;')
         cursor.execute(add_feature_cmd, (sequence,))
-        cursor.execute(add_corpus_cmd, (sequence,))
         cursor.executemany(add_classes_cmd, zip(classes))
         generate_regex(
             OptimString(sequence, Point('.'), pointee=None, control=None),
@@ -732,37 +750,36 @@ def procedure_tfidf(queue: Queue, bdd, cursor, corpus, debug=False):
 
 def create_tables(cursor):
     examples = """CREATE TABLE IF NOT EXISTS Examples (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     corpus_id INTEGER,
     class_id INTEGER,
     feature_id INTEGER,
     value REAL,
     foreign key (class_id) REFERENCES Classes(id),
     foreign key (feature_id) REFERENCES Features(id),
-    foreign key (corpus_id) REFERENCES Corpus(id),
-    unique (corpus_id,class_id,feature_id) ON CONFLICT IGNORE
+    foreign key (corpus_id) REFERENCES Features(id),
+    unique (corpus_id,class_id,feature_id)
 ) TABLESPACE Perceptron"""
     classes = """CREATE TABLE IF NOT EXISTS Classes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     classe TEXT UNIQUE
 ) TABLESPACE Perceptron"""
     features = """CREATE TABLE IF NOT EXISTS Features (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     feature TEXT UNIQUE
 ) TABLESPACE Perceptron"""
-    corpus = """CREATE TABLE IF NOT EXISTS Corpus (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sequence STRING UNIQUE
-) TABLESPACE Perceptron"""
     genealogie = """CREATE TABLE IF NOT EXISTS Genealogie (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     pere_id INTEGER NOT NULL,
     descendant_id INTEGER,
     FOREIGN KEY (pere_id) REFERENCES Features(id),
-    FOREIGN KEY (descendant_id) REFERENCES Featues(id),
-    UNIQUE (pere_id,descendant_id) ON CONFLICT IGNORE
+    FOREIGN KEY (descendant_id) REFERENCES Features(id),
+    UNIQUE (pere_id,descendant_id)
 ) TABLESPACE Perceptron"""
-    cursor.executescript(";\n".join([examples, classes, features, corpus, genealogie]) + ";")
+    cursor.execute(classes)
+    cursor.execute(features)
+    cursor.execute(examples)
+    cursor.execute(genealogie)
 
 
 def deepcopy(d: object):
@@ -898,14 +915,14 @@ def main2():
 
 
 def main3():
-    perceptron_bdd = '/Volumes/RESEARCH/Research/Perceptron.db'
+    perceptron_bdd = '/Volumes/RESEARCH/Research/Perceptron_2.db'
     lexicon_bdd = 'Lexique.db'
     with sqlite3.connect(database=lexicon_bdd) as lexicon:
         lexicon_cursor = lexicon.cursor()
 
     lexicon_cursor.execute("SELECT distinct cgramortho,ortho FROM Lexique order by length(ortho) asc")
 
-    corpus = list(takewhile(cursor=lexicon_cursor))[105104:]
+    corpus = list(takewhile(cursor=lexicon_cursor))
 
     # print(corpus)
     # for j, regex in enumerate(procedure_corpus2(corpus=corpus, debug=True)):
@@ -914,19 +931,41 @@ def main3():
     #         if re.search(regex, sequence):
     #             dico[regex].add(sequence)
     # print(*["\t".join((x, ",".join(y))) for (x,y) in dico.items() if len(y)>1], sep='\n', file=open('temporaire1.txt', 'w', 'utf-8'))
-    with psycopg2.connect(perceptron_bdd, timeout=10) as bdd:
-        bdd_cursor = bdd.cursor()
-        # bdd_cursor.execute("PRAGMA main.synchronous=OFF")
-        # bdd_cursor.execute("PRAGMA main.journal_mode=TRUNCATE")
-        # bdd_cursor.execute("PRAGMA main.locking_mode=EXCLUSIVE")
-        create_tables(cursor=bdd_cursor)
-        procedure_corpus_parallel(
-            corpus=corpus,
-            bdd_cursor=bdd_cursor,
-            seuil=100000,
-            bdd=bdd,
-            debug=True
+    bdd = psycopg2.connect(dbname='template1')
+    # bdd.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    bdd.autocommit = True
+    bdd_cursor = bdd.cursor()
+    # bdd_cursor.execute("PRAGMA main.synchronous=OFF")
+    # bdd_cursor.execute("PRAGMA main.journal_mode=TRUNCATE")
+    # bdd_cursor.execute("PRAGMA main.locking_mode=EXCLUSIVE")
+    try:
+        bdd_cursor.execute(
+            "CREATE DATABASE Gestion TABLESPACE=Perceptron ENCODING=UTF-8 TEMPLATE=template0 CONNECTION LIMIT=1"
         )
+    except psycopg2.ProgrammingError:
+        pass
+    bdd_cursor.execute("drop table if exists genealogie")
+    bdd_cursor.execute("drop table if exists examples")
+    bdd_cursor.execute("drop table if exists features")
+    bdd_cursor.execute("drop table if exists classes")
+    bdd.autocommit = False
+    create_tables(cursor=bdd_cursor)
+
+    procedure_corpus_parallel(
+        corpus=corpus,
+        bdd_cursor=bdd_cursor,
+        seuil=1000000,
+        bdd=bdd,
+        debug=True
+    )
+    bdd.close()
+
+
+def main4():
+    bdd = psycopg2.connect(dbname='Memory')
+    bdd_cursor = bdd.cursor()
+    bdd_cursor.execute("select relname from pg_class where relkind='r' and relname !~ '^(pg_|sql_)';")
+    print(bdd_cursor.fetchall())
 
 
 def takewhile(func=lambda x: (x[0].split(','), x[1]), cursor: sqlite3.Cursor=None):
@@ -950,7 +989,7 @@ def get_bdd_size(bdd):
 
 
 if __name__ == '__main__':
-    main3()
+    main4()
     # parser = ArgumentParser(prog="", description="")
     # parser.add_argument(
     #     "train_set"
